@@ -123,7 +123,7 @@ export function formatOpenAIToAnthropic(body: OpenAIRequest): AnthropicRequest {
           content.push({
             type: "tool_use",
             id: tc.id,
-            name: tc.function?.name,
+            name: tc.function?.name || "",
             input: parseToolArguments(tc.function?.arguments),
           });
         }

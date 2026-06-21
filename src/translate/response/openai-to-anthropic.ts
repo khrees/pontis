@@ -26,14 +26,18 @@ export function formatOpenAIToAnthropic(completion: OpenAIResponse, model: strin
   }
 
   if (message?.content) {
-    content.push({ text: message.content, type: "text" });
+    if (typeof message.content === "string") {
+      content.push({ text: message.content, type: "text" });
+    } else if (Array.isArray(message.content)) {
+      content.push({ text: message.content.map(p => p.type === "text" ? p.text : "").join(""), type: "text" });
+    }
   }
 
   if (message?.tool_calls) {
     content.push(...message.tool_calls.map((item) => ({
       type: 'tool_use' as const,
       id: item.id,
-      name: item.function?.name,
+      name: item.function?.name || "",
       input: parseToolArguments(item.function?.arguments),
     })));
   }

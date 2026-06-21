@@ -5,14 +5,15 @@
 
 interface SystemBlock {
   text: string;
+  [key: string]: any;
 }
 
 /** djb2 hash of system prompt text, used as prompt_cache_key for OpenAI node affinity */
-export function hashSystemPrompt(system: string | SystemBlock[] | undefined): string | null {
+export function hashSystemPrompt(system: string | string[] | { text: string; [key: string]: any }[] | undefined): string | null {
   if (!system) return null;
   const text = typeof system === 'string'
     ? system
-    : system.map((s) => s.text || '').join('\n');
+    : system.map((s) => typeof s === 'string' ? s : (s.text || '')).join('\n');
   if (!text.trim()) return null;
   let hash = 5381;
   for (let i = 0; i < text.length; i++) {
@@ -23,11 +24,13 @@ export function hashSystemPrompt(system: string | SystemBlock[] | undefined): st
 }
 
 interface MessageBlock {
-  content?: string | { type: string; cache_control?: unknown }[];
+  content?: string | { type: string; cache_control?: unknown; [key: string]: any }[];
+  [key: string]: any;
 }
 
 interface CacheControlSystem {
   cache_control?: unknown;
+  [key: string]: any;
 }
 
 /** Check if any message or system prompt has Anthropic cache_control markers */

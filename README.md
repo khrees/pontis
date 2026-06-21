@@ -1,52 +1,95 @@
-# Openthropic 🌌
+# Pontis 🌌
 
-**Openthropic** is a bidirectional translation proxy and local CLI launcher that allows you to run **Claude Code** (and other Anthropic-compatible clients) using free-tier models on **OpenCode**.
+**Pontis** is a bidirectional translation proxy and local CLI launcher that allows you to run **Claude Code**, **OpenAI Codex CLI**, and other terminal-based AI harnesses using free-tier models on **OpenCode** or **locally installed models** (Ollama, LM Studio, etc.).
 
-It bridges the gap between Anthropic's format (which Claude Code uses) and OpenAI's format (which OpenCode Go/Zen mostly use), handles reasoning tokens for models like DeepSeek, and manages model selection on the fly.
+It bridges the gap between Anthropic format (`/v1/messages`), OpenAI chat completions (`/v1/chat/completions`), and OpenAI legacy completions (`/v1/completions`), translating requests, responses, and SSE streams on the fly to match the target engine.
+
+---
 
 ## Features
 
-- **🚀 One-command local setup**: Run `./openthropic.sh` to instantly start the proxy and launch Claude Code in one go.
-- **✨ Dynamic Free Model Discovery**: Automatically queries the OpenCode API to check which free models are active, presenting you with an up-to-date selection menu.
-- **👁️ Auto-Vision / Image Support**: If you attach images in Claude Code, Openthropic automatically routes those requests to the vision-capable `qwen3.6-plus` model transparently.
-- **🔑 Auto-Approved API Keys**: Automatically writes the key approval configuration into your `~/.claude.json` to prevent Claude Code from redirecting you to web OAuth.
+- **🚀 Direct CLI Installation**: Install globally with a single curl command.
+- **💻 Local Model Engines**: Support for Ollama, LM Studio, Llama.cpp, and custom local endpoints out of the box with zero external API keys required.
+- **✨ Active Model Discovery**: Dynamically scans OpenCode's endpoints or your local model server's `/models` list.
+- **👁️ Auto-Vision Format Translation**: Translates Anthropic base64 and URL image blocks into standard OpenAI `image_url` payloads, enabling image inputs if your chosen upstream engine supports vision processing.
+- **🔑 Auto-Approved API Keys**: Writes key configurations into your `~/.claude.json` to bypass OAuth redirects automatically.
+- **⚙️ OpenAI Completions / Codex Compatibility**: Directly translates legacy text-completions prompt shapes to chat formats so you can power your Codex CLI using OpenCode or local chat model engines.
 
 ---
 
 ## Prerequisites
 
-Before running the launcher, make sure you have:
+Before running Pontis, make sure you have:
 - **Node.js** (v18 or higher) installed on your system.
-- **Claude Code** installed globally. If you haven't installed it yet, install it via npm:
+- **Claude Code** (optional) installed globally:
   ```bash
   npm install -g @anthropic-ai/claude-code
   ```
+- **Codex CLI** (optional) installed globally:
+  ```bash
+  npm install -g @openai/codex-cli
+  ```
+- **Local Engine** (optional, e.g. Ollama or LM Studio) running locally.
 
 ---
 
-## Quick Start (Local Run)
+## Installation
 
-1. Clone or download this repository.
-2. Run the launcher script:
+Install Pontis globally using the install script:
+
+```bash
+curl -fsL https://pontis.khrees.com/install | bash
+```
+
+This clones Pontis to `~/.pontis`, configures local dependencies, and sets up the global `pontis` command symlink in your `PATH`.
+
+---
+
+## Quick Start (Interactive Setup)
+
+1. Launch Pontis CLI:
    ```bash
-   ./openthropic.sh
+   pontis
    ```
-3. Enter your OpenCode API Key when prompted (get one from [opencode.ai](https://opencode.ai)). The script will save it to `~/.opencode_api_key` so you only have to enter it once.
-4. Select one of the fetched free models.
-5. Claude Code will boot up automatically using your chosen model!
+2. Select your **API Provider**:
+   * **OpenCode (Zen/Go)**: Enter your OpenCode API Key when prompted (get one from [opencode.ai](https://opencode.ai)).
+   * **Local Models**: Choose from Ollama, LM Studio, Llama.cpp, or enter a custom URL.
+3. Select one of the dynamically fetched models available on that provider.
+4. Claude Code will boot up automatically using your chosen model configuration!
+
+### Command Subcommands:
+You can direct Pontis to launch a specific client interface directly:
+
+* **Claude Code**: `pontis claude`
+* **Codex CLI**: `pontis codex`
+* **Standalone Server**: `pontis standalone` (keeps only the proxy server running on `http://localhost:8787` for external API connections)
+
+---
+
+## Environment Configuration
+
+You can fully automate Pontis and bypass interactive prompt configuration by setting environment variables in your terminal:
+
+| Variable | Description | Example |
+|---|---|---|
+| `PONTIS_PROVIDER` | Define provider preset (`opencode` or `local`) | `export PONTIS_PROVIDER="local"` |
+| `PONTIS_UPSTREAM_URL` | Upstream base URL targeting the model engine | `export PONTIS_UPSTREAM_URL="http://localhost:11434/v1"` |
+| `PONTIS_UPSTREAM_FORMAT` | Upstream API format (`openai`, `anthropic`, or `openai-completions`) | `export PONTIS_UPSTREAM_FORMAT="openai"` |
+| `OPENCODE_API_KEY` | OpenCode API credential | `export OPENCODE_API_KEY="sk-..."` |
+| `LOCAL_API_KEY` | Key for local setups (if authentication is required) | `export LOCAL_API_KEY="sk-local-test"` |
 
 ---
 
 ## Supported Free Models (OpenCode Zen)
 
-Openthropic fetches models dynamically. The standard active free models are:
+When using the OpenCode provider, Pontis dynamically verifies active models. The typical models include:
 
 - `mimo-v2.5-free` (default)
 - `deepseek-v4-flash-free`
 - `big-pickle`
 - `nemotron-3-ultra-free`
 - `north-mini-code-free`
-- 
+
 ---
 
 ## Deployment (Optional)
@@ -58,12 +101,30 @@ npm install
 npm run deploy
 ```
 
-Then configure your custom worker URL inside Claude Code's gateway settings.
+Once deployed, Cloudflare will output your worker URL (e.g. `https://pontis-proxy.your-subdomain.workers.dev`). You can then configure your CLI clients to target this remote URL instead of the local proxy.
+
+### 1. Configuring Claude Code
+Export the `ANTHROPIC_BASE_URL` variable in your terminal pointing to the `/zen` path of your deployed worker:
+
+```bash
+export ANTHROPIC_BASE_URL="https://pontis-proxy.your-subdomain.workers.dev/zen"
+export ANTHROPIC_API_KEY="your-opencode-api-key"
+claude
+```
+
+### 2. Configuring OpenAI Codex CLI
+Export the `OPENAI_BASE_URL` variable in your terminal pointing to the `/v1` path of your deployed worker:
+
+```bash
+export OPENAI_BASE_URL="https://pontis-proxy.your-subdomain.workers.dev/v1"
+export OPENAI_API_KEY="your-opencode-api-key"
+codex
+```
 
 ---
 
 ## License & Attribution
 
-This project is licensed under the MIT License. 
+This project is licensed under the MIT License.
 
-It is a package of the local wrapper script and the translation core from [opencode-cowork-proxy](https://github.com/cucoleadan/opencode-cowork-proxy). All credit for the translation layer goes to [@cucoleadan](https://github.com/cucoleadan).
+All credit for the translation layer goes to [@cucoleadan](https://github.com/cucoleadan) based on their work in [opencode-cowork-proxy](https://github.com/cucoleadan/opencode-cowork-proxy).

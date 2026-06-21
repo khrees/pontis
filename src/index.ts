@@ -7,11 +7,29 @@ import { formatOpenAIToAnthropic as toAnthropicResponse } from './translate/resp
 import { formatAnthropicToOpenAI as toOpenAIResponse } from './translate/response/anthropic-to-openai';
 import { streamOpenAIToAnthropic } from './translate/stream/openai-to-anthropic';
 import { streamAnthropicToOpenAI } from './translate/stream/anthropic-to-openai';
+
+declare const process: any;
+
+// Import completion translators from consolidated module
+import {
+  formatOpenAICompletionToOpenAIChat,
+  formatOpenAIChatToOpenAICompletion,
+  streamOpenAIChatToOpenAICompletion,
+  formatAnthropicToOpenAICompletion,
+  formatOpenAICompletionToAnthropic,
+  formatAnthropicToOpenAICompletionResponse as toOpenAICompletionResponse,
+  formatOpenAICompletionToAnthropicResponse as toAnthropicResponseFromCompletion,
+  streamAnthropicToOpenAICompletion,
+  streamOpenAICompletionToAnthropic
+} from './translate/completions';
+
 import {
   AnthropicRequest,
   OpenAIRequest,
   OpenAIResponse,
-  AnthropicResponse
+  AnthropicResponse,
+  OpenAICompletionRequest,
+  OpenAICompletionResponse
 } from './types';
 
 const GO_UPSTREAM = "https://opencode.ai/zen/go/v1";
@@ -82,11 +100,16 @@ function routeConfig(request: Request): RouteConfig {
 }
 
 function getUpstream(request: Request, routeUpstream: string): string {
-  return request.headers.get("X-Upstream-Url") || routeUpstream;
+  const envUpstream = typeof process !== 'undefined' ? process.env.PONTIS_UPSTREAM_URL : undefined;
+  return request.headers.get("X-Upstream-Url") || envUpstream || routeUpstream;
 }
 
-function upstreamFormat(request: Request): "openai" | "anthropic" {
-  const fmt = (request.headers.get("X-Upstream-Format") || "openai").toLowerCase();
+function upstreamFormat(request: Request): "openai" | "anthropic" | "openai-completions" {
+  const envFormat = typeof process !== 'undefined' ? process.env.PONTIS_UPSTREAM_FORMAT : undefined;
+  const fmt = (request.headers.get("X-Upstream-Format") || envFormat || "openai").toLowerCase();
+  if (fmt === "openai-completions" || fmt === "openai-codex" || fmt === "codex") {
+    return "openai-completions";
+  }
   return fmt === "anthropic" ? "anthropic" : "openai";
 }
 
@@ -131,17 +154,19 @@ async function handleRequest(request: Request): Promise<Response> {
   // Anthropic → OpenAI (for Claude Desktop/Cowork → any OpenAI API)
   if (route.path === '/v1/messages' && request.method === 'POST') {
       const key = extractApiKey(request.headers);
-      const err = validateApiKey(key);
+      const err = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
       if (err) return authErrorResponse(err);
 
       if (fmt === "openai") {
         const req = (await request.json()) as AnthropicRequest;
         const originalModel = req.model;
         if (route.modelOverride) req.model = route.modelOverride;
-        // Remap unsupported models (e.g. claude-3-5-haiku) to a valid OpenCode model
-        req.model = resolveModel(req.model);
-        if (hasImages(req)) {
-          req.model = VISION_MODEL;
+        // Remap unsupported models (e.g. claude-3-5-haiku) to a valid OpenCode model if using OpenCode
+        if (upstream.includes("opencode.ai")) {
+          req.model = resolveModel(req.model);
+          if (hasImages(req)) {
+            req.model = VISION_MODEL;
+          }
         }
         const openaiReq = formatAnthropicToOpenAI(req);
         const upstreamUrl = `${upstream}/chat/completions`;
@@ -149,7 +174,7 @@ async function handleRequest(request: Request): Promise<Response> {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${key}`,
+            ...(key ? { "Authorization": `Bearer ${key}` } : {}),
           },
           body: JSON.stringify(openaiReq),
         });
@@ -172,6 +197,39 @@ async function handleRequest(request: Request): Promise<Response> {
         });
       }
 
+      if (fmt === "openai-completions") {
+        const req = (await request.json()) as AnthropicRequest;
+        const originalModel = req.model;
+        if (route.modelOverride) req.model = route.modelOverride;
+        if (upstream.includes("opencode.ai")) {
+          req.model = resolveModel(req.model);
+        }
+        const completionReq = formatAnthropicToOpenAICompletion(req);
+        const upstreamUrl = `${upstream}/completions`;
+        const res = await fetch(upstreamUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(key ? { "Authorization": `Bearer ${key}` } : {}),
+          },
+          body: JSON.stringify(completionReq),
+        });
+        if (!res.ok) {
+          const errorBody = await res.text();
+          return upstreamErrorResponse(res, errorBody);
+        }
+
+        if (completionReq.stream) {
+          return new Response(streamOpenAICompletionToAnthropic((res.body || new ReadableStream()) as ReadableStream<Uint8Array>, originalModel), {
+            headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+          });
+        }
+        const data = (await res.json()) as OpenAICompletionResponse;
+        return new Response(JSON.stringify(toAnthropicResponseFromCompletion(data, originalModel)), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
       // Pass-through to Anthropic upstream
       const res = await fetch(`${upstream}/v1/messages`, {
         method: "POST",
@@ -181,10 +239,10 @@ async function handleRequest(request: Request): Promise<Response> {
       return res;
   }
 
-  // OpenAI → Anthropic (or pass-through)
+  // OpenAI Chat Completions → Anthropic (or pass-through)
   if (route.path === '/v1/chat/completions' && request.method === 'POST') {
       const key = extractApiKey(request.headers);
-      const err = validateApiKey(key);
+      const err = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
       if (err) return authErrorResponse(err);
 
       if (fmt === "anthropic") {
@@ -211,7 +269,75 @@ async function handleRequest(request: Request): Promise<Response> {
       // Pass-through to OpenAI upstream
       const res = await fetch(`${upstream}/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
+        headers: {
+          "Content-Type": "application/json",
+          ...(key ? { "Authorization": `Bearer ${key}` } : {}),
+        },
+        body: await request.text(),
+      });
+      return res;
+  }
+
+  // OpenAI Legacy Completions → Anthropic OR Chat API (or pass-through)
+  if (route.path === '/v1/completions' && request.method === 'POST') {
+      const key = extractApiKey(request.headers);
+      const err = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
+      if (err) return authErrorResponse(err);
+
+      // Translate legacy completions to modern chat completions (for OpenCode / standard OpenAI endpoint)
+      if (fmt === "openai") {
+        const req = (await request.json()) as OpenAICompletionRequest;
+        const chatReq = formatOpenAICompletionToOpenAIChat(req);
+        const upstreamUrl = `${upstream}/chat/completions`;
+        const res = await fetch(upstreamUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(key ? { "Authorization": `Bearer ${key}` } : {}),
+          },
+          body: JSON.stringify(chatReq),
+        });
+        if (!res.ok) return upstreamErrorResponse(res, await res.text());
+
+        if (chatReq.stream) {
+          return new Response(streamOpenAIChatToOpenAICompletion((res.body || new ReadableStream()) as ReadableStream<Uint8Array>, req.model), {
+            headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+          });
+        }
+        const data = (await res.json()) as OpenAIResponse;
+        return new Response(JSON.stringify(formatOpenAIChatToOpenAICompletion(data, req.model)), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (fmt === "anthropic") {
+        const req = (await request.json()) as OpenAICompletionRequest;
+        const anthReq = formatOpenAICompletionToAnthropic(req);
+        const res = await fetch(`${upstream}/v1/messages`, {
+          method: "POST",
+          headers: anthropicHeaders(request, key!),
+          body: JSON.stringify(anthReq),
+        });
+        if (!res.ok) return upstreamErrorResponse(res, await res.text());
+
+        if (anthReq.stream) {
+          return new Response(streamAnthropicToOpenAICompletion((res.body || new ReadableStream()) as ReadableStream<Uint8Array>, anthReq.model), {
+            headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+          });
+        }
+        const data = (await res.json()) as AnthropicResponse;
+        return new Response(JSON.stringify(toOpenAICompletionResponse(data, anthReq.model)), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      // Pass-through to OpenAI completions upstream
+      const res = await fetch(`${upstream}/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(key ? { "Authorization": `Bearer ${key}` } : {}),
+        },
         body: await request.text(),
       });
       return res;
@@ -220,17 +346,19 @@ async function handleRequest(request: Request): Promise<Response> {
   // Model discovery
   if (route.path === '/v1/models' && request.method === 'GET') {
       const key = extractApiKey(request.headers);
-      const err = validateApiKey(key);
+      const err = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
       if (err) return authErrorResponse(err);
 
       const res = fmt === "anthropic"
         ? await fetch(`${upstream}/v1/models`, {
             method: "GET",
-            headers: anthropicHeaders(request, key),
+            headers: anthropicHeaders(request, key!),
           })
         : await fetch(`${upstream}/models`, {
             method: "GET",
-            headers: { "Authorization": `Bearer ${key}` },
+            headers: {
+              ...(key ? { "Authorization": `Bearer ${key}` } : {}),
+            },
       });
       if (!res.ok) return upstreamErrorResponse(res, await res.text());
       return new Response(await res.text(), { headers: { "Content-Type": "application/json" } });
@@ -244,8 +372,9 @@ async function handleRequest(request: Request): Promise<Response> {
       "/zen": ZEN_UPSTREAM,
     },
     endpoints: {
-      "/v1/messages": "Anthropic → upstream (translated if upstream=openai)",
-      "/v1/chat/completions": "OpenAI → upstream (translated if upstream=anthropic)",
+      "/v1/messages": "Anthropic → upstream (translated if upstream=openai or openai-completions)",
+      "/v1/chat/completions": "OpenAI Chat → upstream (translated if upstream=anthropic)",
+      "/v1/completions": "OpenAI Completions/Codex → upstream (translated if upstream=anthropic or openai)",
       "/v1/models": "Model discovery proxy",
     },
   }, null, 2), {

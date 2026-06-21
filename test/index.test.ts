@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import worker from '../src/index';
 
+declare const process: any;
+
 const key = 'a'.repeat(32);
 
 describe('worker routing', () => {
@@ -242,7 +244,7 @@ describe('worker routing', () => {
     });
 
     const response = await worker.fetch(request);
-    const body = await response.json();
+    const body = await response.json() as any;
     expect(body.model).toBe('claude-sonnet-4-5-20250514');
   });
 
@@ -339,5 +341,86 @@ describe('worker routing', () => {
 
     await worker.fetch(request);
     expect(capturedBody.model).toBe('qwen3.6-plus');
+  });
+
+  it('respects PONTIS_UPSTREAM_URL and PONTIS_UPSTREAM_FORMAT env vars and bypasses model remapping/key validation', async () => {
+    process.env.PONTIS_UPSTREAM_URL = 'http://localhost:11434/v1';
+    process.env.PONTIS_UPSTREAM_FORMAT = 'openai';
+
+    let capturedUrl = '';
+    let capturedBody: any = null;
+    let capturedHeaders: any = null;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url, init: any) => {
+        capturedUrl = url.toString();
+        capturedBody = JSON.parse(init.body);
+        capturedHeaders = init.headers;
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        // short key (length < 32) which would normally trigger an auth error for OpenCode
+        'x-api-key': 'short-local-key',
+      },
+      body: JSON.stringify({
+        model: 'my-custom-local-llama',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    expect(capturedUrl).toBe('http://localhost:11434/v1/chat/completions');
+    expect(capturedBody.model).toBe('my-custom-local-llama'); // verify no model remapping
+    expect(capturedHeaders['Authorization']).toBe('Bearer short-local-key');
+
+    // Clean up env vars
+    delete process.env.PONTIS_UPSTREAM_URL;
+    delete process.env.PONTIS_UPSTREAM_FORMAT;
+  });
+
+  it('bypasses model remapping for legacy completions under non-OpenCode upstreams', async () => {
+    process.env.PONTIS_UPSTREAM_URL = 'http://localhost:1234/v1';
+    process.env.PONTIS_UPSTREAM_FORMAT = 'openai-completions';
+
+    let capturedUrl = '';
+    let capturedBody: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url, init: any) => {
+        capturedUrl = url.toString();
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ id: '123', choices: [{ text: 'ok', finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': 'local-key',
+      },
+      body: JSON.stringify({
+        model: 'local-codellama',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    expect(capturedUrl).toBe('http://localhost:1234/v1/completions');
+    expect(capturedBody.model).toBe('local-codellama'); // verify no model remapping in completions flow
+
+    delete process.env.PONTIS_UPSTREAM_URL;
+    delete process.env.PONTIS_UPSTREAM_FORMAT;
   });
 });

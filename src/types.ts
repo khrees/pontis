@@ -124,7 +124,7 @@ export interface OpenAIToolCall {
   id: string;
   type: "function";
   function: {
-    name: string;
+    name?: string;
     arguments: string;
   };
 }
@@ -188,5 +188,33 @@ export interface OpenAIResponse {
   created: number;
   model: string;
   choices: OpenAIChoice[];
+  usage?: OpenAIUsage;
+}
+
+// --- OpenAI Legacy Completion Types (for Codex, etc.) ---
+
+export interface OpenAICompletionRequest {
+  model: string;
+  prompt: string;
+  max_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  stream?: boolean;
+  stop?: string | string[];
+}
+
+export interface OpenAICompletionChoice {
+  text: string;
+  index: number;
+  logprobs?: unknown;
+  finish_reason: "stop" | "length" | null;
+}
+
+export interface OpenAICompletionResponse {
+  id: string;
+  object: "text_completion";
+  created: number;
+  model: string;
+  choices: OpenAICompletionChoice[];
   usage?: OpenAIUsage;
 }

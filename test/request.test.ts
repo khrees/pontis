@@ -311,7 +311,7 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic request)', () => {
         },
       ],
     });
-    const assistant = result.messages[1];
+    const assistant = result.messages[1] as any;
     expect(assistant.role).toBe('assistant');
     expect(assistant.content[0].type).toBe('tool_use');
     expect(assistant.content[0].name).toBe('get_weather');
@@ -325,7 +325,7 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic request)', () => {
         { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'broken', arguments: '{bad json' } }] },
       ],
     });
-    expect(result.messages[0].content[0].input).toEqual({});
+    expect((result.messages[0].content as any)[0].input).toEqual({});
   });
 
   it('extracts image media type from data URL, not detail', () => {
@@ -339,7 +339,7 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic request)', () => {
         }],
       }],
     });
-    expect(result.messages[0].content[0].source).toEqual({
+    expect((result.messages[0].content as any)[0].source).toEqual({
       type: 'base64',
       media_type: 'image/png',
       data: 'abc123',
@@ -360,14 +360,14 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic request)', () => {
     
     // First message: user with text
     expect(result.messages[0].role).toBe('user');
-    expect(result.messages[0].content[0]).toEqual({ type: "text", text: "What is 2+2?" });
+    expect((result.messages[0].content as any)[0]).toEqual({ type: "text", text: "What is 2+2?" });
     
     // Second message: assistant with tool_use
     expect(result.messages[1].role).toBe('assistant');
-    expect(result.messages[1].content[0].type).toBe('tool_use');
+    expect((result.messages[1].content as any)[0].type).toBe('tool_use');
     
     // Third message: user with tool_result (from standalone tool message)
-    const toolResult = result.messages[2];
+    const toolResult = result.messages[2] as any;
     expect(toolResult.role).toBe('user');
     expect(toolResult.content[0]).toEqual({ type: 'tool_result', tool_use_id: 'c1', content: '4' });
   });
@@ -402,7 +402,7 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic request)', () => {
         { type: 'function', function: { name: 'search', description: 'Search', parameters: { type: 'object' } } },
       ],
     });
-    expect(result.tools[0]).toEqual({
+    expect(result.tools![0]).toEqual({
       name: 'search', description: 'Search', input_schema: { type: 'object' },
     });
   });
