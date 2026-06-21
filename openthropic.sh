@@ -50,27 +50,67 @@ API_KEY=$(echo "$API_KEY" | xargs | tr -d '\r')
 # ─────────────────────────────────────────────
 # 2. Select Model
 # ─────────────────────────────────────────────
-echo "Fetching available models from OpenCode..."
-MODELS_JSON=$(curl -s -H "Authorization: Bearer $API_KEY" https://opencode.ai/zen/v1/models)
+echo "Checking available free models on OpenCode..."
 
-# Parse models using Node.js to filter for free ones (ends with -free or is big-pickle, excluding minimax-m3-free)
+# Fetch and verify free models concurrently using Node.js
 FREE_MODELS=($(node -e '
-try {
-  const json = JSON.parse(process.argv[1]);
-  if (json && Array.isArray(json.data)) {
-    const free = json.data
+const apiKey = process.argv[1];
+
+async function checkModel(model) {
+  try {
+    const res = await fetch("https://opencode.ai/zen/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [{ role: "user", content: "ping" }],
+        max_tokens: 1
+      })
+    });
+    if (res.status === 200) {
+      const data = await res.json();
+      if (data && !data.error) {
+        return { model, ok: true };
+      }
+    }
+    return { model, ok: false };
+  } catch (e) {
+    return { model, ok: false };
+  }
+}
+
+async function main() {
+  try {
+    const res = await fetch("https://opencode.ai/zen/v1/models", {
+      headers: { "Authorization": `Bearer ${apiKey}` }
+    });
+    if (!res.ok) throw new Error();
+    const json = await res.json();
+    if (!json || !Array.isArray(json.data)) throw new Error();
+
+    // Filter for free ones (ends with -free or is big-pickle, excluding minimax-m3-free)
+    const candidates = json.data
       .map(m => m.id)
       .filter(id => (id.endsWith("-free") && id !== "minimax-m3-free") || id === "big-pickle");
-    console.log(free.join(" "));
-  }
-} catch (e) {
-  // fallback if json parsing fails
-}
-' "$MODELS_JSON" 2>/dev/null))
 
-# Fallback in case API call or parsing failed
+    // Check all candidates in parallel
+    const results = await Promise.all(candidates.map(checkModel));
+    const working = results.filter(r => r.ok).map(r => r.model);
+    console.log(working.join(" "));
+  } catch (e) {
+    console.log("");
+  }
+}
+
+main();
+' "$API_KEY" 2>/dev/null))
+
+# Fallback list if fetching or verifying fails
 if [ ${#FREE_MODELS[@]} -eq 0 ]; then
-  FREE_MODELS=("mimo-v2.5-free" "deepseek-v4-flash-free" "big-pickle" "qwen3.6-plus-free" "nemotron-3-ultra-free" "north-mini-code-free")
+  FREE_MODELS=("mimo-v2.5-free" "deepseek-v4-flash-free" "big-pickle" "nemotron-3-ultra-free" "north-mini-code-free")
 fi
 
 echo ""
