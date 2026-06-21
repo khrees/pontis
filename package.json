@@ -10,6 +10,8 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260504.1",
+    "esbuild": "^0.25.0",
+    "pkg": "^5.8.1",
     "vitest": "^3.2.4",
     "wrangler": "^4.87.0"
   },

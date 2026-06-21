@@ -351,16 +351,29 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Ensure dependencies are installed
-if [ ! -d "$PROXY_DIR/node_modules" ]; then
-    echo "Installing proxy dependencies..."
-    (cd "$PROXY_DIR" && npm install --silent 2>/dev/null)
+# Start the proxy (run native precompiled binary if present, fallback to tsx source mode)
+NATIVE_BINARY=""
+if [ -f "$PROXY_DIR/bin/pontis-proxy" ]; then
+    NATIVE_BINARY="$PROXY_DIR/bin/pontis-proxy"
+elif [ -f "$PROXY_DIR/pontis-proxy" ]; then
+    NATIVE_BINARY="$PROXY_DIR/pontis-proxy"
 fi
 
-# Start local server
-PROXY_LOG="$PROXY_DIR/proxy.log"
-(cd "$PROXY_DIR" && npx tsx src/local-server.ts > "$PROXY_LOG" 2>&1) &
-PROXY_PID=$!
+PROXY_LOG="/tmp/pontis_proxy.log"
+
+if [ -n "$NATIVE_BINARY" ]; then
+    chmod +x "$NATIVE_BINARY"
+    "$NATIVE_BINARY" > "$PROXY_LOG" 2>&1 &
+    PROXY_PID=$!
+else
+    # Ensure dependencies are installed (dev/source mode)
+    if [ ! -d "$PROXY_DIR/node_modules" ]; then
+        echo "Installing proxy dependencies..."
+        (cd "$PROXY_DIR" && npm install --silent 2>/dev/null)
+    fi
+    (cd "$PROXY_DIR" && npx tsx src/local-server.ts > "$PROXY_LOG" 2>&1) &
+    PROXY_PID=$!
+fi
 
 # Wait for proxy to become ready with a spinner
 spin='|/-\'

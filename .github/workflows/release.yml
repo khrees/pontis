@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    name: Create GitHub release
+    name: Build & Release
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -18,12 +18,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build proxy JS bundle
+        run: npx esbuild src/local-server.ts --bundle --platform=node --target=node18 --outfile=dist/proxy.js
+
+      - name: Build native binaries
+        run: |
+          mkdir -p dist/bin
+          npx pkg dist/proxy.js \
+            --targets node18-macos-arm64,node18-macos-x64,node18-linux-x64,node18-win-x64 \
+            --out-path dist/bin/
+          # Rename base binaries to standardized names
+          mv dist/bin/proxy-macos-arm64 dist/bin/pontis-proxy-macos-arm64
+          mv dist/bin/proxy-macos-x64 dist/bin/pontis-proxy-macos-x64
+          mv dist/bin/proxy-linux-x64 dist/bin/pontis-proxy-linux-x64
+          mv dist/bin/proxy-win-x64.exe dist/bin/pontis-proxy-win-x64.exe
+
+      - name: Copy launcher script to dist
+        run: cp pontis dist/bin/pontis
+
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: release-${{ github.run_number }}
         run: |
           gh release create "$TAG_NAME" \
+            dist/bin/* \
             --target "$GITHUB_SHA" \
             --title "$TAG_NAME" \
-            --notes "Automated release for $GITHUB_SHA"
+            --notes "Automated release with precompiled binaries for $GITHUB_SHA"
