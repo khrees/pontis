@@ -423,4 +423,11 @@ describe('worker routing', () => {
     delete process.env.PONTIS_UPSTREAM_URL;
     delete process.env.PONTIS_UPSTREAM_FORMAT;
   });
+
+  it('redirects /install to the raw GitHub install script', async () => {
+    const request = new Request('https://proxy.example/install');
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(302);
+    expect(response.headers.get('Location')).toBe('https://raw.githubusercontent.com/khrees/pontis/main/install.sh');
+  });
 });

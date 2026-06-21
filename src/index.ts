@@ -385,6 +385,11 @@ async function handleRequest(request: Request): Promise<Response> {
 
 const app = new Hono();
 app.use('*', logger());
+
+app.get('/install', (c) => {
+  return c.redirect('https://raw.githubusercontent.com/khrees/pontis/main/install.sh', 302);
+});
+
 app.all('*', (c) => handleRequest(c.req.raw));
 
 export default app;
