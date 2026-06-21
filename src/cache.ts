@@ -3,12 +3,16 @@
  * Bridges Anthropic's explicit cache_control markers with OpenAI's automatic prefix caching.
  */
 
+interface SystemBlock {
+  text: string;
+}
+
 /** djb2 hash of system prompt text, used as prompt_cache_key for OpenAI node affinity */
-export function hashSystemPrompt(system: string | any[] | undefined): string | null {
+export function hashSystemPrompt(system: string | SystemBlock[] | undefined): string | null {
   if (!system) return null;
   const text = typeof system === 'string'
     ? system
-    : system.map((s: any) => s.text || '').join('\n');
+    : system.map((s) => s.text || '').join('\n');
   if (!text.trim()) return null;
   let hash = 5381;
   for (let i = 0; i < text.length; i++) {
@@ -18,21 +22,50 @@ export function hashSystemPrompt(system: string | any[] | undefined): string | n
   return 'cache-' + Math.abs(hash).toString(36);
 }
 
+interface MessageBlock {
+  content?: string | { type: string; cache_control?: unknown }[];
+}
+
+interface CacheControlSystem {
+  cache_control?: unknown;
+}
+
 /** Check if any message or system prompt has Anthropic cache_control markers */
-export function hasCacheControl(messages: any[], system?: any): boolean {
+export function hasCacheControl(
+  messages: MessageBlock[],
+  system?: string | CacheControlSystem[] | CacheControlSystem
+): boolean {
   if (Array.isArray(system)) {
-    if (system.some((s: any) => s.cache_control)) return true;
+    if (system.some((s) => typeof s === 'object' && s !== null && 'cache_control' in s)) return true;
   }
-  if (typeof system === 'object' && system?.cache_control) return true;
+  if (typeof system === 'object' && system !== null && 'cache_control' in system) return true;
   for (const msg of messages || []) {
     if (Array.isArray(msg.content)) {
-      if (msg.content.some((block: any) => block.cache_control)) return true;
+      if (msg.content.some((block) => typeof block === 'object' && block !== null && 'cache_control' in block)) return true;
     }
   }
   return false;
 }
 
-function tokenCount(...values: any[]): number {
+interface UsageLike {
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+  };
+  input_tokens_details?: {
+    cached_tokens?: number;
+  };
+  cache_read_input_tokens?: number;
+  prompt_tokens?: number;
+  input_tokens?: number;
+  promptTokens?: number;
+  inputTokens?: number;
+  completion_tokens?: number;
+  output_tokens?: number;
+  completionTokens?: number;
+  outputTokens?: number;
+}
+
+function tokenCount(...values: (number | undefined)[]): number {
   for (const value of values) {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
   }
@@ -40,7 +73,7 @@ function tokenCount(...values: any[]): number {
 }
 
 /** Extract cached token count from common OpenAI-compatible usage shapes. */
-export function extractCachedTokens(usage: any): number {
+export function extractCachedTokens(usage: UsageLike | undefined | null): number {
   return tokenCount(
     usage?.prompt_tokens_details?.cached_tokens,
     usage?.input_tokens_details?.cached_tokens,
@@ -49,7 +82,7 @@ export function extractCachedTokens(usage: any): number {
 }
 
 /** Extract input token count from OpenAI, Anthropic, and OpenAI-compatible providers. */
-export function extractInputTokens(usage: any): number {
+export function extractInputTokens(usage: UsageLike | undefined | null): number {
   return tokenCount(
     usage?.prompt_tokens,
     usage?.input_tokens,
@@ -63,12 +96,12 @@ export function extractInputTokens(usage: any): number {
  * OpenAI-compatible usage usually includes cached tokens inside prompt/input tokens,
  * so subtract them when mapping to Anthropic usage to avoid double counting.
  */
-export function extractUncachedInputTokens(usage: any): number {
+export function extractUncachedInputTokens(usage: UsageLike | undefined | null): number {
   return Math.max(0, extractInputTokens(usage) - extractCachedTokens(usage));
 }
 
 /** Extract output token count from OpenAI, Anthropic, and OpenAI-compatible providers. */
-export function extractOutputTokens(usage: any): number {
+export function extractOutputTokens(usage: UsageLike | undefined | null): number {
   return tokenCount(
     usage?.completion_tokens,
     usage?.output_tokens,

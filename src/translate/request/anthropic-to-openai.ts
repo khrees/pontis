@@ -1,9 +1,18 @@
 import { hashSystemPrompt } from '../../cache';
+import {
+  AnthropicRequest,
+  AnthropicContentBlock,
+  AnthropicImageBlock,
+  OpenAIRequest,
+  OpenAIMessage,
+  OpenAIContentPart,
+  OpenAIToolCall
+} from '../../types';
 
-function translateImageBlock(part: any): any {
+function translateImageBlock(part: AnthropicImageBlock): OpenAIContentPart | null {
   const src = part.source;
   if (!src) return null;
-  if (src.type === "url") {
+  if (src.type === "url" && src.url) {
     return { type: "image_url", image_url: { url: src.url } };
   }
   if (src.type === "base64") {
@@ -12,25 +21,25 @@ function translateImageBlock(part: any): any {
   return null;
 }
 
-export function formatAnthropicToOpenAI(body: any): any {
+export function formatAnthropicToOpenAI(body: AnthropicRequest): OpenAIRequest {
   const { model, messages, system, temperature, max_tokens, top_p, stop_sequences, tools, stream } = body;
 
-  const openAIMessages = Array.isArray(messages)
-    ? messages.flatMap((msg: any) => {
+  const openAIMessages: OpenAIMessage[] = Array.isArray(messages)
+    ? messages.flatMap((msg) => {
         if (typeof msg.content === "string") {
           return [{ role: msg.role, content: msg.content }];
         }
         if (!Array.isArray(msg.content)) return [];
 
-        const result: any[] = [];
+        const result: OpenAIMessage[] = [];
 
         if (msg.role === "assistant") {
-          const assistantMsg: any = { role: "assistant", content: null };
+          const assistantMsg: OpenAIMessage = { role: "assistant", content: null };
           let text = "";
           let reasoningContent = "";
-          const toolCalls: any[] = [];
+          const toolCalls: OpenAIToolCall[] = [];
 
-          msg.content.forEach((part: any) => {
+          (msg.content as AnthropicContentBlock[]).forEach((part) => {
             if (part.type === "text") {
               text += (typeof part.text === "string" ? part.text : JSON.stringify(part.text)) + "\n";
             } else if (part.type === "thinking") {
@@ -49,15 +58,17 @@ export function formatAnthropicToOpenAI(body: any): any {
           if (trimmed) assistantMsg.content = trimmed;
           if (trimmedReasoning) assistantMsg.reasoning_content = trimmedReasoning;
           if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
-          if (assistantMsg.content || assistantMsg.reasoning_content || assistantMsg.tool_calls) result.push(assistantMsg);
+          if (assistantMsg.content || assistantMsg.reasoning_content || assistantMsg.tool_calls) {
+            result.push(assistantMsg);
+          }
         }
 
         if (msg.role === "user") {
           let userText = "";
-          const contentParts: any[] = [];
-          const toolResults: any[] = [];
+          const contentParts: OpenAIContentPart[] = [];
+          const toolResults: OpenAIMessage[] = [];
 
-          msg.content.forEach((part: any) => {
+          (msg.content as AnthropicContentBlock[]).forEach((part) => {
             if (part.type === "text") {
               userText += (typeof part.text === "string" ? part.text : JSON.stringify(part.text)) + "\n";
             } else if (part.type === "image") {
@@ -88,11 +99,13 @@ export function formatAnthropicToOpenAI(body: any): any {
       })
     : [];
 
-  const systemMessages = Array.isArray(system)
-    ? system.map((item: any) => ({ role: "system", content: item.text }))
-    : system ? [{ role: "system", content: system }] : [];
+  const systemMessages: OpenAIMessage[] = Array.isArray(system)
+    ? system.map((item) => ({ role: "system", content: typeof item === "string" ? item : (item.text || "") }))
+    : typeof system === "string"
+      ? [{ role: "system", content: system }]
+      : [];
 
-  const data: any = {
+  const data: OpenAIRequest = {
     model,
     messages: [...systemMessages, ...openAIMessages],
   };
@@ -105,7 +118,7 @@ export function formatAnthropicToOpenAI(body: any): any {
   if (stop_sequences) data.stop = stop_sequences;
 
   if (tools) {
-    data.tools = tools.map((item: any) => ({
+    data.tools = tools.map((item) => ({
       type: "function",
       function: {
         name: item.name,
@@ -115,9 +128,6 @@ export function formatAnthropicToOpenAI(body: any): any {
     }));
   }
 
-  // Inject prompt_cache_key from system prompt hash for OpenAI node affinity caching.
-  // This ensures requests with the same system prompt are routed to the same backend
-  // node, enabling automatic OpenAI-style prefix caching.
   const cacheKey = hashSystemPrompt(system);
   if (cacheKey) {
     data.prompt_cache_key = cacheKey;

@@ -1,4 +1,9 @@
 import { extractCachedTokens, extractOutputTokens, extractUncachedInputTokens } from '../../cache';
+import {
+  OpenAIResponse,
+  AnthropicResponse,
+  AnthropicContentBlock
+} from '../../types';
 
 function parseToolArguments(value: string | undefined): Record<string, unknown> {
   if (!value) return {};
@@ -10,10 +15,10 @@ function parseToolArguments(value: string | undefined): Record<string, unknown> 
   }
 }
 
-export function formatOpenAIToAnthropic(completion: any, model: string): any {
+export function formatOpenAIToAnthropic(completion: OpenAIResponse, model: string): AnthropicResponse {
   const messageId = "msg_" + Date.now();
 
-  let content: any = [];
+  const content: AnthropicContentBlock[] = [];
   const message = completion.choices?.[0]?.message;
 
   if (message?.reasoning_content) {
@@ -25,8 +30,8 @@ export function formatOpenAIToAnthropic(completion: any, model: string): any {
   }
 
   if (message?.tool_calls) {
-    content.push(...message.tool_calls.map((item: any) => ({
-      type: 'tool_use',
+    content.push(...message.tool_calls.map((item) => ({
+      type: 'tool_use' as const,
       id: item.id,
       name: item.function?.name,
       input: parseToolArguments(item.function?.arguments),
@@ -35,12 +40,12 @@ export function formatOpenAIToAnthropic(completion: any, model: string): any {
 
   // Map OpenAI finish_reason to Anthropic stop_reason
   const finishReason = completion.choices?.[0]?.finish_reason;
-  let stopReason = "end_turn";
+  let stopReason: AnthropicResponse["stop_reason"] = "end_turn";
   if (finishReason === "tool_calls") stopReason = "tool_use";
   else if (finishReason === "length") stopReason = "max_tokens";
   else if (finishReason === "stop") stopReason = "end_turn";
 
-  const result: any = {
+  const result: AnthropicResponse = {
     id: messageId,
     type: "message",
     role: "assistant",

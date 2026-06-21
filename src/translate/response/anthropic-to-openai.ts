@@ -2,12 +2,18 @@
  * Converts Anthropic Messages response to OpenAI Chat Completions response.
  */
 import { extractInputTokens, extractOutputTokens } from '../../cache';
+import {
+  AnthropicResponse,
+  OpenAIResponse,
+  OpenAIMessage,
+  OpenAIToolCall
+} from '../../types';
 
-export function formatAnthropicToOpenAI(response: any, model: string): any {
+export function formatAnthropicToOpenAI(response: AnthropicResponse, model: string): OpenAIResponse {
   const content = response.content || [];
 
   let textContent = "";
-  const toolCalls: any[] = [];
+  const toolCalls: OpenAIToolCall[] = [];
 
   for (const block of content) {
     if (block.type === "text") {
@@ -24,7 +30,7 @@ export function formatAnthropicToOpenAI(response: any, model: string): any {
     }
   }
 
-  const message: any = { role: "assistant" };
+  const message: OpenAIMessage = { role: "assistant", content: null };
 
   if (textContent) {
     message.content = textContent;

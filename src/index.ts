@@ -7,6 +7,12 @@ import { formatOpenAIToAnthropic as toAnthropicResponse } from './translate/resp
 import { formatAnthropicToOpenAI as toOpenAIResponse } from './translate/response/anthropic-to-openai';
 import { streamOpenAIToAnthropic } from './translate/stream/openai-to-anthropic';
 import { streamAnthropicToOpenAI } from './translate/stream/anthropic-to-openai';
+import {
+  AnthropicRequest,
+  OpenAIRequest,
+  OpenAIResponse,
+  AnthropicResponse
+} from './types';
 
 const GO_UPSTREAM = "https://opencode.ai/zen/go/v1";
 const ZEN_UPSTREAM = "https://opencode.ai/zen/v1";
@@ -95,11 +101,11 @@ function anthropicHeaders(request: Request, key: string): Record<string, string>
   return headers;
 }
 
-function hasImages(body: any): boolean {
+function hasImages(body: AnthropicRequest): boolean {
   const messages = body?.messages;
   if (!Array.isArray(messages)) return false;
-  return messages.some((msg: any) =>
-    Array.isArray(msg.content) && msg.content.some((part: any) => part.type === "image")
+  return messages.some((msg) =>
+    Array.isArray(msg.content) && msg.content.some((part) => part.type === "image")
   );
 }
 
@@ -129,7 +135,7 @@ async function handleRequest(request: Request): Promise<Response> {
       if (err) return authErrorResponse(err);
 
       if (fmt === "openai") {
-        const req = await request.json();
+        const req = (await request.json()) as AnthropicRequest;
         const originalModel = req.model;
         if (route.modelOverride) req.model = route.modelOverride;
         // Remap unsupported models (e.g. claude-3-5-haiku) to a valid OpenCode model
@@ -156,11 +162,11 @@ async function handleRequest(request: Request): Promise<Response> {
         }
 
         if (openaiReq.stream) {
-          return new Response(streamOpenAIToAnthropic(res.body as ReadableStream, originalModel), {
+          return new Response(streamOpenAIToAnthropic((res.body || new ReadableStream()) as ReadableStream<Uint8Array>, originalModel), {
             headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
           });
         }
-        const data: any = await res.json();
+        const data = (await res.json()) as OpenAIResponse;
         return new Response(JSON.stringify(toAnthropicResponse(data, originalModel)), {
           headers: { "Content-Type": "application/json" },
         });
@@ -182,7 +188,7 @@ async function handleRequest(request: Request): Promise<Response> {
       if (err) return authErrorResponse(err);
 
       if (fmt === "anthropic") {
-        const req = await request.json();
+        const req = (await request.json()) as OpenAIRequest;
         const anthReq = formatOpenAIToAnthropic(req);
         const res = await fetch(`${upstream}/v1/messages`, {
           method: "POST",
@@ -192,11 +198,11 @@ async function handleRequest(request: Request): Promise<Response> {
         if (!res.ok) return upstreamErrorResponse(res, await res.text());
 
         if (anthReq.stream) {
-          return new Response(streamAnthropicToOpenAI(res.body as ReadableStream, anthReq.model), {
+          return new Response(streamAnthropicToOpenAI((res.body || new ReadableStream()) as ReadableStream<Uint8Array>, anthReq.model), {
             headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
           });
         }
-        const data: any = await res.json();
+        const data = (await res.json()) as AnthropicResponse;
         return new Response(JSON.stringify(toOpenAIResponse(data, anthReq.model)), {
           headers: { "Content-Type": "application/json" },
         });

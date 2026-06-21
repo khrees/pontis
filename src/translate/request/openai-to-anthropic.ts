@@ -1,6 +1,13 @@
 /**
  * Converts OpenAI Chat Completions request to Anthropic Messages request.
  */
+import {
+  OpenAIRequest,
+  OpenAIMessage,
+  AnthropicRequest,
+  AnthropicMessage,
+  AnthropicContentBlock
+} from '../../types';
 
 function parseToolArguments(value: string | undefined): Record<string, unknown> {
   if (!value) return {};
@@ -12,7 +19,7 @@ function parseToolArguments(value: string | undefined): Record<string, unknown> 
   }
 }
 
-function imageSourceFromUrl(url: string | undefined): any {
+function imageSourceFromUrl(url: string | undefined): { type: "base64" | "url"; media_type?: string; data?: string; url?: string } {
   const match = (url || "").match(/^data:([^;]+);base64,(.*)$/);
   if (match) {
     return { type: "base64", media_type: match[1], data: match[2] };
@@ -20,19 +27,19 @@ function imageSourceFromUrl(url: string | undefined): any {
   return { type: "base64", media_type: "image/jpeg", data: url || "" };
 }
 
-export function formatOpenAIToAnthropic(body: any): any {
+export function formatOpenAIToAnthropic(body: OpenAIRequest): AnthropicRequest {
   const { model, messages, temperature, max_tokens, top_p, stop, tools, stream } = body;
 
   // Separate system messages from conversation
   const systemMessages: string[] = [];
-  const conversationMessages: any[] = [];
+  const conversationMessages: OpenAIMessage[] = [];
 
   for (const msg of messages || []) {
     if (msg.role === "system") {
       if (typeof msg.content === "string") {
         systemMessages.push(msg.content);
       } else if (Array.isArray(msg.content)) {
-        msg.content.forEach((part: any) => {
+        msg.content.forEach((part) => {
           if (part.type === "text") systemMessages.push(part.text);
         });
       }
@@ -42,18 +49,18 @@ export function formatOpenAIToAnthropic(body: any): any {
   }
 
   // Convert OpenAI messages to Anthropic format
-  const anthropicMessages: any[] = [];
+  const anthropicMessages: AnthropicMessage[] = [];
 
   for (let i = 0; i < conversationMessages.length; i++) {
     const msg = conversationMessages[i];
 
     if (msg.role === "user") {
-      const content: any[] = [];
+      const content: AnthropicContentBlock[] = [];
 
       if (typeof msg.content === "string") {
         content.push({ type: "text", text: msg.content });
       } else if (Array.isArray(msg.content)) {
-        msg.content.forEach((part: any) => {
+        msg.content.forEach((part) => {
           if (part.type === "text") {
             content.push({ type: "text", text: part.text });
           } else if (part.type === "image_url") {
@@ -79,7 +86,7 @@ export function formatOpenAIToAnthropic(body: any): any {
         for (const toolMsg of toolMessages) {
           content.push({
             type: "tool_result",
-            tool_use_id: toolMsg.tool_call_id,
+            tool_use_id: toolMsg.tool_call_id || "",
             content: typeof toolMsg.content === "string"
               ? toolMsg.content
               : JSON.stringify(toolMsg.content),
@@ -96,19 +103,19 @@ export function formatOpenAIToAnthropic(body: any): any {
       while (i + 1 < conversationMessages.length && conversationMessages[i + 1].role === "tool") {
         toolMessages.push(conversationMessages[++i]);
       }
-      const content: any[] = toolMessages.map((toolMsg: any) => ({
+      const content: AnthropicContentBlock[] = toolMessages.map((toolMsg) => ({
         type: "tool_result",
-        tool_use_id: toolMsg.tool_call_id,
+        tool_use_id: toolMsg.tool_call_id || "",
         content: typeof toolMsg.content === "string"
           ? toolMsg.content
           : JSON.stringify(toolMsg.content),
       }));
       anthropicMessages.push({ role: "user", content });
     } else if (msg.role === "assistant") {
-      const content: any[] = [];
+      const content: AnthropicContentBlock[] = [];
 
       if (msg.content) {
-        content.push({ type: "text", text: msg.content });
+        content.push({ type: "text", text: msg.content as string });
       }
 
       if (msg.tool_calls) {
@@ -129,7 +136,7 @@ export function formatOpenAIToAnthropic(body: any): any {
   }
 
   // Build Anthropic request
-  const anthropicRequest: any = {
+  const anthropicRequest: AnthropicRequest = {
     model,
     messages: anthropicMessages,
     max_tokens: max_tokens || 4096,
@@ -155,10 +162,10 @@ export function formatOpenAIToAnthropic(body: any): any {
   }
 
   if (tools) {
-    anthropicRequest.tools = tools.map((t: any) => ({
-      name: t.function?.name || t.name,
-      description: t.function?.description || t.description,
-      input_schema: t.function?.parameters || t.input_schema || { type: "object", properties: {} },
+    anthropicRequest.tools = tools.map((t) => ({
+      name: t.function?.name || "",
+      description: t.function?.description,
+      input_schema: t.function?.parameters || { type: "object", properties: {} },
     }));
   }
 

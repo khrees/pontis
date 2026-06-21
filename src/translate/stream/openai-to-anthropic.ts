@@ -1,21 +1,42 @@
 import { extractCachedTokens, extractOutputTokens, extractUncachedInputTokens } from '../../cache';
+import { OpenAIUsage } from '../../types';
 
-export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: string): ReadableStream {
+interface StreamDelta {
+  tool_calls?: {
+    id?: string;
+    function?: {
+      name?: string;
+      arguments?: string;
+    };
+  }[];
+  reasoning_content?: string;
+  content?: string;
+}
+
+interface ParsedChunk {
+  usage?: OpenAIUsage;
+  choices?: {
+    delta?: StreamDelta;
+    finish_reason?: string;
+  }[];
+}
+
+export function streamOpenAIToAnthropic(openaiStream: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> {
   const messageId = "msg_" + Date.now();
 
-  const enqueueSSE = (controller: ReadableStreamDefaultController, eventType: string, data: any) => {
+  const enqueueSSE = (controller: ReadableStreamDefaultController<Uint8Array>, eventType: string, data: unknown) => {
     controller.enqueue(new TextEncoder().encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
   };
 
-  return new ReadableStream({
+  return new ReadableStream<Uint8Array>({
     async start(controller) {
       let contentBlockIndex = -1;
       let hasStartedTextBlock = false;
       let hasStartedThinkingBlock = false;
       let isToolUse = false;
       let currentToolCallId: string | null = null;
-      let toolCallJsonMap = new Map<string, string>();
-      let lastUsage: any = null;
+      const toolCallJsonMap = new Map<string, string>();
+      let lastUsage: Record<string, number> | null = null;
       let finishReason: string | null = null;
       let messageStarted = false;
 
@@ -23,7 +44,7 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
       const decoder = new TextDecoder();
       let buffer = '';
 
-      function processStreamDelta(delta: any, parsed: any) {
+      function processStreamDelta(delta: StreamDelta, parsed: ParsedChunk) {
         // Capture usage from any chunk that has it
         if (parsed.usage) {
           lastUsage = {
@@ -40,7 +61,7 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
         }
 
         // Handle tool calls
-        if (delta.tool_calls?.length > 0) {
+        if (delta.tool_calls && delta.tool_calls.length > 0) {
           for (const toolCall of delta.tool_calls) {
             const toolCallId = toolCall.id;
 
@@ -209,7 +230,7 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
                   const data = line.slice(6).trim();
                   if (data === '[DONE]') continue;
                   try {
-                    const parsed = JSON.parse(data);
+                    const parsed = JSON.parse(data) as ParsedChunk;
                     const delta = parsed.choices?.[0]?.delta;
                     if (delta) processStreamDelta(delta, parsed);
                   } catch { /* parse error */ }
@@ -230,7 +251,7 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
               const data = line.slice(6).trim();
               if (data === '[DONE]') continue;
               try {
-                const parsed = JSON.parse(data);
+                const parsed = JSON.parse(data) as ParsedChunk;
                 const delta = parsed.choices?.[0]?.delta;
                 if (delta) processStreamDelta(delta, parsed);
               } catch { continue; }

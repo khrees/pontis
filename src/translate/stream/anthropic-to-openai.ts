@@ -1,14 +1,41 @@
 /**
  * Converts Anthropic Messages streaming SSE to OpenAI Chat Completions streaming SSE.
  */
-export function streamAnthropicToOpenAI(anthropicStream: ReadableStream, model: string): ReadableStream {
+import { OpenAIMessage } from '../../types';
+
+interface AnthropicSSEEvent {
+  type: string;
+  index?: number;
+  content_block?: {
+    type?: string;
+    id?: string;
+    name?: string;
+    text?: string;
+  };
+  delta?: {
+    type?: string;
+    text?: string;
+    thinking?: string;
+    partial_json?: string;
+    stop_reason?: string;
+  };
+  message?: {
+    id?: string;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+    };
+  };
+}
+
+export function streamAnthropicToOpenAI(anthropicStream: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> {
   const chatId = "chatcmpl-" + Math.floor(Date.now() / 1000);
 
-  const enqueueSSE = (controller: ReadableStreamDefaultController, data: any) => {
+  const enqueueSSE = (controller: ReadableStreamDefaultController<Uint8Array>, data: unknown) => {
     controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`));
   };
 
-  return new ReadableStream({
+  return new ReadableStream<Uint8Array>({
     async start(controller) {
       const reader = anthropicStream.getReader();
       const decoder = new TextDecoder();
@@ -17,17 +44,18 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream, model: 
       // Tool call tracking: index → { id, name, args }
       const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
       let contentBlockIndex = -1;
-      let activeBlockType: "text" | "thinking" | "tool_use" | null = null;
 
-      function emitChunk(delta: any, finishReason?: string) {
-        const chunk: any = {
+      function emitChunk(delta: Partial<OpenAIMessage>, finishReason?: string) {
+        const chunk: Record<string, unknown> = {
           id: chatId,
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
           model,
           choices: [{ index: 0, delta }],
         };
-        if (finishReason) chunk.choices[0].finish_reason = finishReason;
+        if (finishReason) {
+          (chunk.choices as { finish_reason?: string }[])[0].finish_reason = finishReason;
+        }
         enqueueSSE(controller, chunk);
       }
 
@@ -37,34 +65,29 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream, model: 
           const raw = line.slice(6).trim();
           if (!raw) continue;
 
-          let evt: any;
+          let evt: AnthropicSSEEvent;
           try { evt = JSON.parse(raw); } catch { continue; }
 
           switch (evt.type) {
             case "message_start":
               contentBlockIndex = -1;
-              activeBlockType = null;
               toolCallMap.clear();
               break;
 
             case "content_block_start": {
               const block = evt.content_block;
-              contentBlockIndex = evt.index;
+              if (evt.index !== undefined) {
+                contentBlockIndex = evt.index;
+              }
 
-              if (block?.type === "text") {
-                activeBlockType = "text";
-              } else if (block?.type === "thinking") {
-                activeBlockType = "thinking";
-              } else if (block?.type === "tool_use") {
-                activeBlockType = "tool_use";
+              if (block?.type === "tool_use") {
                 // Emit the initial tool_call chunk with id, name, empty args
                 const tcId = block.id || `call_${Date.now()}`;
                 toolCallMap.set(contentBlockIndex, { id: tcId, name: block.name || "", args: "" });
                 emitChunk({
                   tool_calls: [{
-                    index: contentBlockIndex,
                     id: tcId,
-                    type: "function",
+                    type: "function" as const,
                     function: { name: block.name || "", arguments: "" },
                   }],
                 });
@@ -85,7 +108,8 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream, model: 
                   tc.args += delta.partial_json || "";
                   emitChunk({
                     tool_calls: [{
-                      index: contentBlockIndex,
+                      id: tc.id,
+                      type: "function" as const,
                       function: { arguments: delta.partial_json || "" },
                     }],
                   });
@@ -95,7 +119,6 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream, model: 
             }
 
             case "content_block_stop":
-              activeBlockType = null;
               break;
 
             case "message_delta": {

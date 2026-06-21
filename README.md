@@ -4,17 +4,23 @@
 
 It bridges the gap between Anthropic's format (which Claude Code uses) and OpenAI's format (which OpenCode Go/Zen mostly use), handles reasoning tokens for models like DeepSeek, and manages model selection on the fly.
 
-> [!NOTE]
-> This project is built on top of the excellent translation layer from [opencode-cowork-proxy](https://github.com/cucoleadan/opencode-cowork-proxy) by [@cucoleadan](https://github.com/cucoleadan).
-
----
-
 ## Features
 
 - **🚀 One-command local setup**: Run `./openthropic.sh` to instantly start the proxy and launch Claude Code in one go.
-- **✨ Dynamic Free Model Discovery**: Automatically queries the OpenCode API to check which free models are active, presenting you with an up-to-date selection menu (unsupported/ended promotion models like `minimax-m3-free` are automatically filtered out).
+- **✨ Dynamic Free Model Discovery**: Automatically queries the OpenCode API to check which free models are active, presenting you with an up-to-date selection menu.
 - **👁️ Auto-Vision / Image Support**: If you attach images in Claude Code, Openthropic automatically routes those requests to the vision-capable `qwen3.6-plus` model transparently.
 - **🔑 Auto-Approved API Keys**: Automatically writes the key approval configuration into your `~/.claude.json` to prevent Claude Code from redirecting you to web OAuth.
+
+---
+
+## Prerequisites
+
+Before running the launcher, make sure you have:
+- **Node.js** (v18 or higher) installed on your system.
+- **Claude Code** installed globally. If you haven't installed it yet, install it via npm:
+  ```bash
+  npm install -g @anthropic-ai/claude-code
+  ```
 
 ---
 
@@ -35,15 +41,12 @@ It bridges the gap between Anthropic's format (which Claude Code uses) and OpenA
 
 Openthropic fetches models dynamically. The standard active free models are:
 
-- `mimo-v2.5-free` (Recommended default)
+- `mimo-v2.5-free` (default)
 - `deepseek-v4-flash-free`
 - `big-pickle`
-- `qwen3.6-plus-free`
 - `nemotron-3-ultra-free`
 - `north-mini-code-free`
-
-*Note: `minimax-m3-free` is explicitly blocked because its free tier promotion has expired.*
-
+- 
 ---
 
 ## Deployment (Optional)
@@ -56,23 +59,6 @@ npm run deploy
 ```
 
 Then configure your custom worker URL inside Claude Code's gateway settings.
-
----
-
-## Uploading to GitHub
-
-To put this repository on your own GitHub account, run these commands:
-
-1. **Initialize Git & Commit**:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit of Openthropic"
-   ```
-2. **Create GitHub Repo and Push** (requires [GitHub CLI](https://cli.github.com/)):
-   ```bash
-   gh repo create openthropic --public --source=. --remote=origin --push
-   ```
 
 ---
 
