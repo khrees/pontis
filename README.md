@@ -14,6 +14,7 @@ It bridges the gap between Anthropic format (`/v1/messages`), OpenAI chat comple
 - **👁️ Auto-Vision Format Translation**: Translates Anthropic base64 and URL image blocks into standard OpenAI `image_url` payloads, enabling image inputs if your chosen upstream engine supports vision processing.
 - **🔑 Auto-Approved API Keys**: Writes key configurations into your `~/.claude.json` to bypass OAuth redirects automatically.
 - **⚙️ OpenAI Completions / Codex Compatibility**: Directly translates legacy text-completions prompt shapes to chat formats so you can power your Codex CLI using OpenCode or local chat model engines.
+  - ⚠️ **Codex CLI support is experimental** — see [known issues](#codex-cli-experimental) below.
 
 ---
 
@@ -61,8 +62,33 @@ This clones Pontis to `~/.pontis`, configures local dependencies, and sets up th
 You can direct Pontis to launch a specific client interface directly:
 
 * **Claude Code**: `pontis claude`
-* **Codex CLI**: `pontis codex`
+* **Codex CLI** ⚠️: `pontis codex` — see [experimental notes](#codex-cli-experimental)
 * **Standalone Server**: `pontis standalone` (keeps only the proxy server running on `http://localhost:8787` for external API connections)
+
+---
+
+## Codex CLI (Experimental) ⚠️
+
+Pontis includes experimental support for OpenAI's [Codex CLI](https://github.com/openai/codex-cli). It works in some configurations but has **known issues**:
+
+- **Streaming responses may not finalize** — the `response.completed` SSE event is missing output and usage data, which can cause Codex CLI to hang after receiving a response.
+- **Model discovery is fragile** — Codex CLI may not detect models correctly depending on what version of the OpenAI SDK it's using internally.
+- **No conversation continuity** — the `previous_response_id` field is not yet handled, so every request starts a fresh conversation.
+- **The `-m` flag** used by the `pontis codex` launcher may not be supported by all versions of the Codex CLI binary.
+
+If you run into issues, try using `pontis standalone` and pointing Codex CLI at the proxy manually:
+
+```bash
+# Start the proxy
+pontis standalone
+
+# In another terminal, launch Codex CLI pointing at the proxy
+export OPENAI_BASE_URL="http://localhost:8787/v1"
+export OPENAI_API_KEY="your-opencode-api-key"
+codex --model mimo-v2.5-free
+```
+
+Contributions to improve Codex CLI support are welcome!
 
 ---
 

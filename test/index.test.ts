@@ -174,6 +174,57 @@ describe('worker routing', () => {
     });
   });
 
+  it('translates models list format for Codex clients', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        data: [
+          { id: 'mimo-v2.5-free', object: 'model', created: 1234, owned_by: 'opencode' }
+        ]
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+
+    const request = new Request('https://proxy.example/v1/models?client_version=0.139.0', {
+      headers: { 
+        'x-api-key': key,
+        'user-agent': 'codex_exec/0.139.0'
+      },
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    const json = await response.json() as any;
+    expect(json.models).toBeDefined();
+    expect(json.models[0].slug).toBe('mimo-v2.5-free');
+    expect(json.models[0].shell_type).toBe('shell_command');
+    expect(json.models[0].apply_patch_tool_type).toBe('freeform');
+    expect(json.models[0].truncation_policy.mode).toBe('tokens');
+  });
+
+  it('translates single model metadata request for Codex clients', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        data: [
+          { id: 'big-pickle', object: 'model', created: 1234, owned_by: 'opencode' }
+        ]
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+
+    const request = new Request('https://proxy.example/v1/models/big-pickle?client_version=0.139.0', {
+      headers: { 
+        'x-api-key': key,
+        'user-agent': 'codex_exec/0.139.0'
+      },
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    const json = await response.json() as any;
+    expect(json.slug).toBe('big-pickle');
+    expect(json.shell_type).toBe('shell_command');
+    expect(json.apply_patch_tool_type).toBe('freeform');
+    expect(json.truncation_policy.mode).toBe('tokens');
+  });
+
   it('overrides model from URL path segment with /go prefix', async () => {
     let capturedBody: any = null;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
@@ -264,13 +315,13 @@ describe('worker routing', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key },
       body: JSON.stringify({
-        model: 'deepseek-v4-pro',
+        model: 'mistral-custom-model',
         messages: [{ role: 'user', content: 'hi' }],
       }),
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('deepseek-v4-pro');
+    expect(capturedBody.model).toBe('mistral-custom-model');
   });
 
   it('overrides model to qwen3.6-plus when image attachments are present on the go path', async () => {
@@ -429,5 +480,232 @@ describe('worker routing', () => {
     const response = await worker.fetch(request);
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('https://raw.githubusercontent.com/khrees/pontis/main/install.sh');
+  });
+
+  it('remaps GPT models to default free model under OpenCode upstream but preserves them under local upstream', async () => {
+    // 1. OpenCode upstream (remaps gpt to mimo-v2.5-free)
+    let capturedBody: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'gpt-5.4-mini',
+        messages: [{ role: 'user', content: 'hi' }]
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(capturedBody.model).toBe('mimo-v2.5-free');
+
+    // Restore mock for second run
+    vi.restoreAllMocks();
+
+    // 2. Local upstream (preserves gpt-5.4-mini)
+    process.env.PONTIS_UPSTREAM_URL = 'http://localhost:11434/v1';
+    process.env.PONTIS_UPSTREAM_FORMAT = 'openai';
+
+    let capturedLocalBody: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedLocalBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const localRequest = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': 'local-key',
+      },
+      body: JSON.stringify({
+        model: 'gpt-5.4-mini',
+        messages: [{ role: 'user', content: 'hi' }]
+      }),
+    });
+
+    await worker.fetch(localRequest);
+    expect(capturedLocalBody.model).toBe('gpt-5.4-mini');
+
+    delete process.env.PONTIS_UPSTREAM_URL;
+    delete process.env.PONTIS_UPSTREAM_FORMAT;
+  });
+
+  it('remaps GPT models to dynamic PONTIS_MODEL environment variable if set', async () => {
+    process.env.PONTIS_MODEL = 'big-pickle';
+    let capturedBody: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'gpt-5.4-mini',
+        messages: [{ role: 'user', content: 'hi' }]
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(capturedBody.model).toBe('big-pickle');
+
+    vi.restoreAllMocks();
+    delete process.env.PONTIS_MODEL;
+  });
+
+  it('remaps GPT models to default free model under OpenCode upstream for chat completions pass-through', async () => {
+    let capturedBody: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'gpt-5.4-mini',
+        messages: [{ role: 'user', content: 'hi' }]
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(capturedBody.model).toBe('mimo-v2.5-free');
+    vi.restoreAllMocks();
+  });
+
+  it('remaps GPT models to default free model under OpenCode upstream for legacy completions translation', async () => {
+    let capturedBody: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'gpt-5.4-mini',
+        prompt: 'say hi'
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(capturedBody.model).toBe('mimo-v2.5-free');
+    vi.restoreAllMocks();
+  });
+
+  it('remaps GPT models to default free model under OpenCode upstream for responses API', async () => {
+    let capturedBody: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'gpt-5.4-mini',
+        input: [
+          { role: 'user', content: [{ type: 'input_text', text: 'hi' }] }
+        ]
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    expect(capturedBody.model).toBe('mimo-v2.5-free');
+
+    const resJson = await response.json() as any;
+    expect(resJson.object).toBe('response');
+    expect(resJson.model).toBe('gpt-5.4-mini');
+    expect(resJson.output[0].content[0].text).toBe('ok');
+
+    vi.restoreAllMocks();
+  });
+
+  it('remaps paid OpenCode models to free counterparts under OpenCode upstream', async () => {
+    let capturedBody: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    // Test deepseek paid to free
+    const request1 = new Request('https://proxy.example/zen/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'deepseek-v4-flash',
+        input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }]
+      }),
+    });
+
+    const response1 = await worker.fetch(request1);
+    expect(response1.status).toBe(200);
+    expect(capturedBody.model).toBe('deepseek-v4-flash-free');
+
+    const resJson1 = await response1.json() as any;
+    expect(resJson1.model).toBe('deepseek-v4-flash');
+
+    // Test mimo paid to free
+    const request2 = new Request('https://proxy.example/zen/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'mimo-v2.5',
+        input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }]
+      }),
+    });
+
+    const response2 = await worker.fetch(request2);
+    expect(response2.status).toBe(200);
+    expect(capturedBody.model).toBe('mimo-v2.5-free');
+
+    const resJson2 = await response2.json() as any;
+    expect(resJson2.model).toBe('mimo-v2.5');
+
+    vi.restoreAllMocks();
   });
 });

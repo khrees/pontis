@@ -14,6 +14,25 @@ KEY_FILE="$HOME/.opencode_api_key"
 PORT=8787
 PROXY_URL="http://localhost:$PORT"
 
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+LILAC='\033[1;35m'
+NC='\033[0m'
+BOLD='\033[1m'
+
+info() { echo -e "${CYAN}[info]${NC} $1"; }
+success() { echo -e "${GREEN}[success]${NC} $1"; }
+warn() { echo -e "${LILAC}[warning]${NC} $1"; }
+error() { echo -e "${RED}[error]${NC} $1"; exit 1; }
+
+header() {
+  echo -e "${LILAC}=============================================${NC}"
+  echo -e "         ${BOLD}${GREEN}$1${NC}"
+  echo -e "${LILAC}=============================================${NC}"
+}
+
 # ─────────────────────────────────────────────
 # 1. Select API Provider
 # ─────────────────────────────────────────────
@@ -25,11 +44,9 @@ elif [ -n "$PONTIS_UPSTREAM_URL" ]; then
 fi
 
 if [ -z "$PROVIDER" ]; then
-  echo "============================================="
-  echo "            Select API Provider              "
-  echo "============================================="
-  echo "1) OpenCode (Zen/Go) - Cloud Models [Default]"
-  echo "2) Local Models (Ollama, LM Studio, vLLM, etc.)"
+  header "Select API Provider"
+  echo -e "1) OpenCode (Zen/Go) - Cloud Models [Default]"
+  echo -e "2) Local Models (Ollama, LM Studio, vLLM, etc.)"
   echo ""
   read -r -p "Select option [1-2]: " PROVIDER_SEL
   if [ "$PROVIDER_SEL" = "2" ]; then
@@ -55,13 +72,11 @@ if [ "$PROVIDER" = "local" ]; then
 
   if [ -z "$PONTIS_UPSTREAM_URL" ]; then
     echo ""
-    echo "============================================="
-    echo "       Select Local Model Engine             "
-    echo "============================================="
-    echo "1) Ollama (http://localhost:11434/v1) [Default]"
-    echo "2) LM Studio (http://localhost:1234/v1)"
-    echo "3) Llama.cpp (http://localhost:8080/v1)"
-    echo "4) Custom URL"
+    header "Select Local Model Engine"
+    echo -e "1) Ollama (http://localhost:11434/v1) [Default]"
+    echo -e "2) LM Studio (http://localhost:1234/v1)"
+    echo -e "3) Llama.cpp (http://localhost:8080/v1)"
+    echo -e "4) Custom URL"
     echo ""
     read -r -p "Select option [1-4]: " ENGINE_OPT
     if [ "$ENGINE_OPT" = "2" ]; then
@@ -71,8 +86,7 @@ if [ "$PROVIDER" = "local" ]; then
     elif [ "$ENGINE_OPT" = "4" ]; then
       read -r -p "Enter custom endpoint URL: " LOCAL_URL
       if [ -z "$LOCAL_URL" ]; then
-        echo "Error: URL cannot be empty."
-        exit 1
+        error "URL cannot be empty."
       fi
     else
       LOCAL_URL="http://localhost:11434/v1"
@@ -94,9 +108,7 @@ else
   elif [ -f "$KEY_FILE" ]; then
       API_KEY=$(cat "$KEY_FILE")
   else
-      echo "============================================="
-      echo "       OpenCode API Key Setup Required       "
-      echo "============================================="
+      header "OpenCode API Key Setup"
       echo ""
       echo "To get your key:"
       echo "  1. Go to https://opencode.ai"
@@ -106,14 +118,13 @@ else
       echo ""
       read -r -p "Enter your OpenCode API Key: " API_KEY
       if [ -z "$API_KEY" ]; then
-          echo "Error: API Key is required."
-          exit 1
+          error "API Key is required."
       fi
       read -r -p "Save this key to $KEY_FILE for future use? (y/n): " SAVE_KEY
       if [[ "$SAVE_KEY" =~ ^[Yy]$ ]]; then
           echo "$API_KEY" > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
-          echo "✓ Saved API key to $KEY_FILE"
+          success "Saved API key to $KEY_FILE"
       fi
   fi
   # Trim API_KEY
@@ -137,12 +148,10 @@ elif [ -n "$1" ]; then
   shift
 else
   # Prompt selector if no arguments are passed
-  echo "============================================="
-  echo "         Pontis CLI Client Selector          "
-  echo "============================================="
-  echo "1) Claude Code (pontis claude)"
-  echo "2) OpenAI Codex CLI (pontis codex)"
-  echo "3) Standalone Proxy (runs background proxy only)"
+  header "Pontis CLI Client Selector"
+  echo -e "1) Claude Code (pontis claude)"
+  echo -e "2) OpenAI Codex CLI (pontis codex)"
+  echo -e "3) Standalone Proxy (runs background proxy only)"
   echo ""
   read -r -p "Select client to launch [1-3, default: 1]: " CLIENT_OPT
   if [ "$CLIENT_OPT" = "1" ]; then
@@ -152,7 +161,7 @@ else
   elif [ "$CLIENT_OPT" = "3" ]; then
     CLIENT_CMD="standalone"
   else
-    echo "Defaulting to Claude Code..."
+    info "Defaulting to Claude Code..."
     CLIENT_CMD="claude"
   fi
 fi
@@ -185,34 +194,31 @@ if [ "$PROVIDER" = "local" ]; then
 
   spin='|/-\'
   while kill -0 $NODE_PID 2>/dev/null; do
-    printf "\rChecking available local models... [%c] " "$spin"
+    printf "\rChecking available local models... [${CYAN}%c${NC}] " "$spin"
     spin=${spin#?}${spin%?}
     sleep 0.1
   done
-  printf "\rChecking available local models... Done!   \n"
+  printf "\rChecking available local models... ${GREEN}Done!${NC}   \n"
 
   LOCAL_MODELS=($(cat /tmp/pontis_local_models.txt))
   rm -f /tmp/pontis_local_models.txt
 
   if [ ${#LOCAL_MODELS[@]} -eq 0 ]; then
-    echo "⚠ Could not fetch models from $PONTIS_UPSTREAM_URL."
+    echo -e "${LILAC}⚠ Could not fetch models from $PONTIS_UPSTREAM_URL.${NC}"
     echo "Please make sure your local engine (Ollama/LM Studio) is running."
     echo ""
     read -r -p "Enter local model name (e.g. llama3, qwen2.5-coder): " MODEL
     if [ -z "$MODEL" ]; then
-      echo "Error: Model name is required."
-      exit 1
+      error "Model name is required."
     fi
   else
     echo ""
-    echo "============================================="
-    echo "       Select Local Model                    "
-    echo "============================================="
+    header "Select Local Model"
     for i in "${!LOCAL_MODELS[@]}"; do
-      echo "$((i+1))) ${LOCAL_MODELS[$i]}"
+      echo -e "$((i+1))) ${LOCAL_MODELS[$i]}"
     done
     CUSTOM_OPT=$(( ${#LOCAL_MODELS[@]} + 1 ))
-    echo "${CUSTOM_OPT}) Custom (enter model ID manually)"
+    echo -e "${CUSTOM_OPT}) Custom (enter model ID manually)"
     echo ""
     read -r -p "Select option [1-${CUSTOM_OPT}]: " MODEL_OPT
 
@@ -226,72 +232,109 @@ if [ "$PROVIDER" = "local" ]; then
     fi
   fi
 else
-  # Fetch and verify free models concurrently using Node.js
-  # Running in the background with a loading spinner to prevent lag perception
-  node -e '
-  const apiKey = process.argv[1];
-
-  async function checkModel(model) {
-    try {
-      const res = await fetch("https://opencode.ai/zen/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: model,
-          messages: [{ role: "user", content: "ping" }],
-          max_tokens: 1
-        })
-      });
-      if (res.status === 200) {
-        const data = await res.json();
-        if (data && !data.error) {
-          return { model, ok: true };
+  # Check if we have a valid 24h cache first to avoid showing spinner and fetching
+  CACHE_MODELS=""
+  CACHE_FILE="$HOME/.pontis_models_cache.json"
+  if [ -f "$CACHE_FILE" ]; then
+    node -e '
+      const fs = require("fs");
+      try {
+        const cache = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        if (cache && Array.isArray(cache.models) && typeof cache.timestamp === "number") {
+          if (Date.now() - cache.timestamp < 24 * 60 * 60 * 1000) {
+            console.log(cache.models.join(" "));
+            process.exit(0);
+          }
         }
+      } catch (e) {}
+      process.exit(1);
+    ' "$CACHE_FILE" > /tmp/pontis_cache_models.txt 2>/dev/null
+    if [ $? -eq 0 ]; then
+      CACHE_MODELS=$(cat /tmp/pontis_cache_models.txt)
+    fi
+    rm -f /tmp/pontis_cache_models.txt
+  fi
+
+  if [ -n "$CACHE_MODELS" ]; then
+    printf "Checking available free models on OpenCode... ${GREEN}Done!${NC}\n"
+    FREE_MODELS=($CACHE_MODELS)
+  else
+    # Fetch and verify free models concurrently using Node.js
+    # Running in the background with a loading spinner to prevent lag perception
+    node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const apiKey = process.argv[1];
+    const cacheFile = path.join(process.env.HOME || process.env.USERPROFILE || "", ".pontis_models_cache.json");
+
+    async function checkModel(model) {
+      try {
+        const res = await fetch("https://opencode.ai/zen/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [{ role: "user", content: "ping" }],
+            max_tokens: 1
+          }),
+          signal: AbortSignal.timeout(4000)
+        });
+        if (res.status === 200) {
+          const data = await res.json();
+          if (data && !data.error) {
+            return { model, ok: true };
+          }
+        }
+        return { model, ok: false };
+      } catch (e) {
+        return { model, ok: false };
       }
-      return { model, ok: false };
-    } catch (e) {
-      return { model, ok: false };
     }
-  }
 
-  async function main() {
-    try {
-      const res = await fetch("https://opencode.ai/zen/v1/models", {
-        headers: { "Authorization": `Bearer ${apiKey}` }
-      });
-      if (!res.ok) throw new Error();
-      const json = await res.json();
-      if (!json || !Array.isArray(json.data)) throw new Error();
+    async function main() {
+      try {
+        const res = await fetch("https://opencode.ai/zen/v1/models", {
+          headers: { "Authorization": `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(5000)
+        });
+        if (!res.ok) throw new Error();
+        const json = await res.json();
+        if (!json || !Array.isArray(json.data)) throw new Error();
 
-      const candidates = json.data
-        .map(m => m.id)
-        .filter(id => (id.endsWith("-free") && id !== "minimax-m3-free") || id === "big-pickle");
+        const candidates = json.data
+          .map(m => m.id)
+          .filter(id => (id.endsWith("-free") && id !== "minimax-m3-free") || id === "big-pickle");
 
-      const results = await Promise.all(candidates.map(checkModel));
-      const working = results.filter(r => r.ok).map(r => r.model);
-      console.log(working.join(" "));
-    } catch (e) {
-      console.log("");
+        const results = await Promise.all(candidates.map(checkModel));
+        const working = results.filter(r => r.ok).map(r => r.model);
+        
+        if (working.length > 0) {
+          fs.writeFileSync(cacheFile, JSON.stringify({ timestamp: Date.now(), models: working }), "utf8");
+        }
+        console.log(working.join(" "));
+      } catch (e) {
+        console.log("");
+      }
     }
-  }
 
-  main();
-  ' "$API_KEY" > /tmp/pontis_models.txt 2>/dev/null &
-  NODE_PID=$!
+    main();
+    ' "$API_KEY" > /tmp/pontis_models.txt 2>/dev/null &
+    NODE_PID=$!
 
-  spin='|/-\'
-  while kill -0 $NODE_PID 2>/dev/null; do
-    printf "\rChecking available free models on OpenCode... [%c] " "$spin"
-    spin=${spin#?}${spin%?}
-    sleep 0.1
-  done
-  printf "\rChecking available free models on OpenCode... Done!   \n"
+    spin='|/-\'
+    while kill -0 $NODE_PID 2>/dev/null; do
+      printf "\rChecking available free models on OpenCode... [${CYAN}%c${NC}] " "$spin"
+      spin=${spin#?}${spin%?}
+      sleep 0.1
+    done
+    printf "\rChecking available free models on OpenCode... ${GREEN}Done!${NC}   \n"
 
-  FREE_MODELS=($(cat /tmp/pontis_models.txt))
-  rm -f /tmp/pontis_models.txt
+    FREE_MODELS=($(cat /tmp/pontis_models.txt))
+    rm -f /tmp/pontis_models.txt
+  fi
 
   # Fallback list if fetching or verifying fails
   if [ ${#FREE_MODELS[@]} -eq 0 ]; then
@@ -299,14 +342,13 @@ else
   fi
 
   echo ""
-  echo "============================================="
-  echo "       Select OpenCode Free Model            "
-  echo "============================================="
+  header "Select OpenCode Free Model"
   for i in "${!FREE_MODELS[@]}"; do
-    echo "$((i+1))) ${FREE_MODELS[$i]}"
+    echo -e "$((i+1))) ${FREE_MODELS[$i]}"
   done
   CUSTOM_OPT=$(( ${#FREE_MODELS[@]} + 1 ))
-  echo "${CUSTOM_OPT}) Custom (enter model ID manually)"
+  echo -e "${CUSTOM_OPT}) Custom (enter model ID manually)"
+  echo ""
 
   read -r -p "Select option [1-${CUSTOM_OPT}]: " MODEL_OPT
 
@@ -316,24 +358,23 @@ else
   elif [ "$MODEL_OPT" -eq "${CUSTOM_OPT}" ]; then
     read -r -p "Enter custom model ID: " MODEL
     if [ -z "$MODEL" ]; then
-      echo "Error: Model ID cannot be empty."
-      exit 1
+      error "Model ID cannot be empty."
     fi
   else
     # Default to the first model in the list
     MODEL="${FREE_MODELS[0]}"
-    echo "Defaulting to $MODEL"
+    info "Defaulting to $MODEL"
   fi
 fi
 
-echo "Selected Model: $MODEL"
+success "Selected Model: ${GREEN}$MODEL${NC}"
 
 # ─────────────────────────────────────────────
 # 5. Start/Reuse Proxy
 # ─────────────────────────────────────────────
 # Always restart the proxy on port $PORT to ensure latest configuration/upstream environment variables are applied
 if lsof -i :$PORT >/dev/null 2>&1; then
-    echo "⚡ Restarting local Pontis proxy on port $PORT..."
+    info "⚡ Restarting local Pontis proxy on port $PORT..."
     lsof -t -i :$PORT | xargs kill -9 2>/dev/null || true
     sleep 0.5
 fi
@@ -344,14 +385,14 @@ PROXY_PID=""
 cleanup() {
     if [ "$LAUNCH_PROXY" = true ] && [ -n "$PROXY_PID" ]; then
         echo ""
-        echo "Stopping local Pontis proxy..."
+        info "Stopping local Pontis proxy..."
         kill "$PROXY_PID" 2>/dev/null || true
         wait "$PROXY_PID" 2>/dev/null || true
     fi
 }
 trap cleanup EXIT INT TERM
 
-# Start the proxy (run native precompiled binary if present, fallback to tsx source mode)
+# Start the proxy (run native precompiled binary if present, fallback to bundled JS, fallback to tsx source mode)
 NATIVE_BINARY=""
 if [ -f "$PROXY_DIR/bin/pontis-proxy" ]; then
     NATIVE_BINARY="$PROXY_DIR/bin/pontis-proxy"
@@ -363,15 +404,18 @@ PROXY_LOG="/tmp/pontis_proxy.log"
 
 if [ -n "$NATIVE_BINARY" ]; then
     chmod +x "$NATIVE_BINARY"
-    "$NATIVE_BINARY" > "$PROXY_LOG" 2>&1 &
+    PONTIS_MODEL="$MODEL" "$NATIVE_BINARY" > "$PROXY_LOG" 2>&1 &
+    PROXY_PID=$!
+elif [ -f "$PROXY_DIR/dist/proxy.js" ]; then
+    PONTIS_MODEL="$MODEL" node "$PROXY_DIR/dist/proxy.js" > "$PROXY_LOG" 2>&1 &
     PROXY_PID=$!
 else
     # Ensure dependencies are installed (dev/source mode)
     if [ ! -d "$PROXY_DIR/node_modules" ]; then
-        echo "Installing proxy dependencies..."
+        info "Installing proxy dependencies..."
         (cd "$PROXY_DIR" && npm install --silent 2>/dev/null)
     fi
-    (cd "$PROXY_DIR" && npx tsx src/local-server.ts > "$PROXY_LOG" 2>&1) &
+    (cd "$PROXY_DIR" && PONTIS_MODEL="$MODEL" npx --no-install tsx src/local-server.ts > "$PROXY_LOG" 2>&1) &
     PROXY_PID=$!
 fi
 
@@ -379,18 +423,16 @@ fi
 spin='|/-\'
 i=0
 while ! curl -s -f "$PROXY_URL/" >/dev/null 2>&1; do
-  printf "\rWaiting for proxy to start... [%c] " "$spin"
+  printf "\rWaiting for proxy to start... [${CYAN}%c${NC}] " "$spin"
   spin=${spin#?}${spin%?}
   sleep 0.1
   i=$((i+1))
   if [ $i -ge 120 ]; then
     echo ""
-    echo "Error: Proxy failed to start on port $PORT within 12 seconds."
-    echo "Check logs: $PROXY_LOG"
-    exit 1
+    error "Proxy failed to start on port $PORT within 12 seconds. Check logs at $PROXY_LOG"
   fi
 done
-printf "\rWaiting for proxy to start... ✓ Ready!      \n"
+printf "\rWaiting for proxy to start... ${GREEN}✓ Ready!${NC}      \n"
 
 # ─────────────────────────────────────────────
 # 6. Quick connectivity test
@@ -409,7 +451,7 @@ TEST_PID=$!
 
 spin='|/-\'
 while kill -0 $TEST_PID 2>/dev/null; do
-  printf "\rTesting API connectivity... [%c] " "$spin"
+  printf "\rTesting API connectivity... [${CYAN}%c${NC}] " "$spin"
   spin=${spin#?}${spin%?}
   sleep 0.1
 done
@@ -418,15 +460,15 @@ TEST_RESPONSE=$(cat /tmp/pontis_test.txt)
 rm -f /tmp/pontis_test.txt
 
 if echo "$TEST_RESPONSE" | grep -q "CURL_FAILED"; then
-    printf "\rTesting API connectivity... ⚠ Could not reach proxy (continuing anyway)\n"
+    printf "\rTesting API connectivity... ${LILAC}⚠ Could not reach proxy (continuing anyway)${NC}\n"
 else
     HTTP_CODE=$(echo "$TEST_RESPONSE" | tail -1)
     BODY=$(echo "$TEST_RESPONSE" | sed '$d')
 
     if [ "$HTTP_CODE" = "200" ] || echo "$BODY" | grep -q '"type":"message"'; then
-        printf "\rTesting API connectivity... ✓ Connected!      \n"
+        printf "\rTesting API connectivity... ${GREEN}✓ Connected!${NC}      \n"
     elif [ "$HTTP_CODE" = "401" ]; then
-        printf "\rTesting API connectivity... ⚠ API returned 401 Unauthorized.\n"
+        printf "\rTesting API connectivity... ${RED}⚠ API returned 401 Unauthorized.${NC}\n"
         echo "Your API key may be invalid or expired."
         echo "Response: $(echo "$BODY" | head -c 200)"
         echo ""
@@ -435,7 +477,7 @@ else
             exit 1
         fi
     else
-        printf "\rTesting API connectivity... ⚠ Got HTTP %s (continuing)\n" "$HTTP_CODE"
+        printf "\rTesting API connectivity... ${LILAC}⚠ Got HTTP %s (continuing)${NC}\n" "$HTTP_CODE"
     fi
 fi
 
@@ -443,15 +485,13 @@ fi
 # 7. Launch Client (Claude Code / Codex CLI / Standalone)
 # ─────────────────────────────────────────────
 echo ""
-echo "============================================="
-echo "        Launching Pontis CLI Harness         "
-echo "============================================="
-echo "Proxy:    $PROXY_URL"
-echo "Model:    $MODEL"
+header "Launching Pontis CLI Harness"
+echo -e "Proxy:    ${CYAN}$PROXY_URL${NC}"
+echo -e "Model:    ${GREEN}$MODEL${NC}"
 echo ""
 
 if [ "$CLIENT_CMD" = "standalone" ]; then
-  echo "Running in standalone proxy mode."
+  info "Running in standalone proxy mode."
   echo "Connect your clients to $PROXY_URL"
   echo "Press Ctrl+C to stop the proxy server."
   # Keep script running to prevent cleanup trap from executing immediately
@@ -462,7 +502,7 @@ fi
 FINAL_CMD=""
 
 if [ "$CLIENT_CMD" = "codex" ]; then
-  echo "Launching Codex CLI..."
+  info "Launching Codex CLI..."
   # Map standard OpenAI base URLs to our proxy for Codex CLI
   export OPENAI_BASE_URL="$PROXY_URL/v1"
   export OPENAI_API_KEY="$API_KEY"
@@ -472,9 +512,12 @@ if [ "$CLIENT_CMD" = "codex" ]; then
   elif command -v openai-codex >/dev/null 2>&1; then
     FINAL_CMD="openai-codex"
   else
-    echo "⚠ Codex CLI not found in PATH."
-    echo "Make sure you have your Codex CLI installed."
-    exit 1
+    error "Codex CLI not found in PATH. Make sure you have Codex CLI installed."
+  fi
+
+  # Auto-inject the selected model from pontis interactive prompt if not specified by user in CLI arguments
+  if [[ ! " $* " =~ " -m " ]] && [[ ! " $* " =~ " --model " ]]; then
+    set -- -m "$MODEL" "$@"
   fi
 elif [ "$CLIENT_CMD" = "claude" ]; then
   # Default to Claude Code
@@ -498,7 +541,7 @@ elif [ "$CLIENT_CMD" = "claude" ]; then
         config.customApiKeyResponses.rejected = config.customApiKeyResponses.rejected.filter(k => k !== keySuffix);
       }
       fs.writeFileSync(configFile, JSON.stringify(config, null, 2), "utf8");
-      console.log("✓ Auto-approved API key suffix in ~/.claude.json");
+      console.log("\x1b[32m✓ Auto-approved API key suffix in ~/.claude.json\x1b[0m");
     } catch (e) {
       console.error("Failed to auto-approve API key in config:", e);
     }
@@ -521,5 +564,5 @@ else
   export OPENAI_API_KEY="$API_KEY"
 fi
 
-echo "Running command: $FINAL_CMD $@"
+success "Running command: ${BOLD}${CYAN}$FINAL_CMD${NC} $@"
 exec "$FINAL_CMD" "$@"

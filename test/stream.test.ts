@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { streamOpenAIToAnthropic } from '../src/translate/stream/openai-to-anthropic';
 import { streamAnthropicToOpenAI } from '../src/translate/stream/anthropic-to-openai';
+import { streamChatToResponses } from '../src/translate/stream/chat-to-responses';
 
 /** Helper: collect all chunks from a ReadableStream into a string */
 async function collectStream(stream: ReadableStream): Promise<string> {
@@ -163,5 +164,81 @@ describe('streamAnthropicToOpenAI (Anthropic SSE → OpenAI SSE)', () => {
 
     expect(result).toContain('"reasoning_content":"thinking"');
     expect(result).toContain('"content":"answer"');
+  });
+});
+
+describe('streamChatToResponses (OpenAI SSE → Responses API SSE)', () => {
+  it('converts chat completions chunks to Responses events', async () => {
+    const openaiSSE = sseStream(
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"thinking"}}]}\n\n',
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hello"}}]}\n\n',
+      'data: [DONE]\n\n',
+    );
+
+    const result = await collectStream(streamChatToResponses(openaiSSE, 'test-model'));
+
+    expect(result).toContain('event: response.created');
+    expect(result).toContain('event: response.output_item.added');
+    expect(result).toContain('event: response.content_part.added');
+    expect(result).toContain('event: response.reasoning_text.delta');
+    expect(result).toContain('"delta":"thinking"');
+    expect(result).toContain('"response_id":');
+    expect(result).toContain('"item_id":');
+    expect(result).toContain('event: response.reasoning_text.done');
+    expect(result).toContain('event: response.output_text.delta');
+    expect(result).toContain('"delta":"Hello"');
+    expect(result).toContain('event: response.output_text.done');
+    expect(result).toContain('event: response.content_part.done');
+    expect(result).toContain('event: response.output_item.done');
+    expect(result).toContain('event: response.completed');
+  });
+
+  it('converts chat completions chunks containing tool calls to Responses events', async () => {
+    const openaiSSE = sseStream(
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_999","type":"function","function":{"name":"run_command","arguments":""}}]}}]}\n\n',
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"command\\":\\"ls\\"}"}}]}}]}\n\n',
+      'data: [DONE]\n\n',
+    );
+
+    const result = await collectStream(streamChatToResponses(openaiSSE, 'test-model'));
+
+    expect(result).toContain('event: response.output_item.added');
+    expect(result).toContain('"type":"function_call"');
+    expect(result).toContain('"name":"run_command"');
+    expect(result).toContain('event: response.function_call_arguments.delta');
+    expect(result).toContain('"delta":"{\\"command\\":\\"ls\\"}"');
+    expect(result).toContain('event: response.function_call_arguments.done');
+    expect(result).toContain('event: response.output_item.done');
+  });
+
+  it('converts chat completions chunks containing DSML XML tool calls to Responses events', async () => {
+    const openaiSSE = sseStream(
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Thinking... "}}]}\n\n',
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"<｜｜DSML｜｜tool_calls>"}}]}\n\n',
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"<｜｜DSML｜｜invoke name=\\"run_command\\">"}}]}\n\n',
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"<｜｜DSML｜｜parameter name=\\"command\\" string=\\"true\\">ls -la</｜｜DSML｜｜parameter>"}}]}\n\n',
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"</｜｜DSML｜｜invoke>"}}]}\n\n',
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"</｜｜DSML｜｜tool_calls>Bye."}}]}\n\n',
+      'data: [DONE]\n\n',
+    );
+
+    const result = await collectStream(streamChatToResponses(openaiSSE, 'test-model'));
+
+    // Should NOT contain the DSML tags as text deltas
+    expect(result).not.toContain('"delta":"<｜｜DSML｜｜tool_calls>"');
+    expect(result).not.toContain('"delta":"</｜｜DSML｜｜tool_calls>"');
+
+    // Should contain the translated tool call events
+    expect(result).toContain('event: response.output_item.added');
+    expect(result).toContain('"type":"function_call"');
+    expect(result).toContain('"name":"run_command"');
+    expect(result).toContain('event: response.function_call_arguments.delta');
+    expect(result).toContain('"delta":"{\\"command\\":\\"ls -la\\"}"');
+    expect(result).toContain('event: response.function_call_arguments.done');
+    expect(result).toContain('event: response.output_item.done');
+
+    // Should contain standard text delta before and after DSML
+    expect(result).toContain('"delta":"Thinking... "');
+    expect(result).toContain('"delta":"Bye."');
   });
 });

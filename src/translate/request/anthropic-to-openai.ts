@@ -128,6 +128,20 @@ export function formatAnthropicToOpenAI(body: AnthropicRequest): OpenAIRequest {
     }));
   }
 
+  // Translate Anthropic tool_choice to OpenAI format
+  //   { type: "auto" }               → "auto" (default, can omit)
+  //   { type: "any" }                → "required"
+  //   { type: "tool", name: "xxx" }  → { type: "function", function: { name: "xxx" } }
+  if (body.tool_choice) {
+    const tc = body.tool_choice as Record<string, unknown>;
+    if (tc.type === "any") {
+      data.tool_choice = "required";
+    } else if (tc.type === "tool" && tc.name) {
+      data.tool_choice = { type: "function", function: { name: tc.name } };
+    }
+    // { type: "auto" } is the default in OpenAI too, so we omit it
+  }
+
   const cacheKey = hashSystemPrompt(system);
   if (cacheKey) {
     data.prompt_cache_key = cacheKey;
