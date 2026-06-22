@@ -130,7 +130,7 @@ export interface OpenAIToolCall {
 }
 
 export interface OpenAIMessage {
-  role: "system" | "user" | "assistant" | "tool";
+  role: "system" | "user" | "assistant" | "tool" | "developer";
   content: string | OpenAIContentPart[] | null;
   name?: string;
   tool_calls?: OpenAIToolCall[];

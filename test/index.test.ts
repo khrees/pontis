@@ -175,7 +175,7 @@ describe('worker routing', () => {
   });
 
   it('translates models list format for Codex clients', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({
         data: [
           { id: 'mimo-v2.5-free', object: 'model', created: 1234, owned_by: 'opencode' }
@@ -201,7 +201,7 @@ describe('worker routing', () => {
   });
 
   it('translates single model metadata request for Codex clients', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({
         data: [
           { id: 'big-pickle', object: 'model', created: 1234, owned_by: 'opencode' }
@@ -246,7 +246,7 @@ describe('worker routing', () => {
       }),
     });
 
-    const response = await worker.fetch(request);
+    await worker.fetch(request);
     expect(capturedBody.model).toBe('minimax-m2.5-free');
     expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/go/v1/chat/completions', expect.anything());
   });
@@ -401,7 +401,7 @@ describe('worker routing', () => {
     let capturedUrl = '';
     let capturedBody: any = null;
     let capturedHeaders: any = null;
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (url, init: any) => {
         capturedUrl = url.toString();
         capturedBody = JSON.parse(init.body);

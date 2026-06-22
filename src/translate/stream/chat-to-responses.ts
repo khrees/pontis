@@ -17,7 +17,6 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
     arguments: string;
     itemId: string;
   }>();
-  let toolCallOutputsStarted = false;
 
   const enqueueSSE = (controller: ReadableStreamDefaultController<Uint8Array>, eventType: string, data: unknown) => {
     controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
@@ -29,6 +28,8 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
   let pendingText = "";
   let inDsml = false;
   let toolCallCount = 0;
+  let accumulatedUsage: any = null;
+  const completedOutputs: any[] = [];
 
   function ensureTextItem(controller: ReadableStreamDefaultController<Uint8Array>) {
     if (!textItemStarted) {
@@ -260,6 +261,13 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
           role: "assistant"
         }
       });
+      // Track the completed text output for the response.completed event
+      completedOutputs.push({
+        id: itemId,
+        type: "message",
+        role: "assistant",
+        content: [{ type: "text", text: fullText }]
+      });
       textItemStarted = false;
       textContentStarted = false;
     }
@@ -286,6 +294,16 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
           call_id: activeTc.id,
           arguments: activeTc.arguments
         }
+      });
+
+      // Track the completed tool call for the response.completed event
+      completedOutputs.push({
+        id: activeTc.itemId,
+        type: "function_call",
+        name: activeTc.name,
+        call_id: activeTc.id,
+        arguments: activeTc.arguments,
+        status: "completed"
       });
     }
     activeToolCalls.clear();
@@ -374,6 +392,16 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
                 }
               });
 
+              // Track DSML tool call for response.completed
+              completedOutputs.push({
+                id: toolItemId,
+                type: "function_call",
+                name: toolName,
+                call_id: callId,
+                arguments: argsStr,
+                status: "completed"
+              });
+
               pendingText = pendingText.slice(0, matchIndex) + pendingText.slice(matchIndex + matchedString.length);
               invokeMatch = pendingText.match(invokeRegex);
             }
@@ -417,8 +445,15 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
             type: "response.completed",
             response: {
               id: responseId,
+              object: "response",
               status: "completed",
-              model: originalModel
+              model: originalModel,
+              output: completedOutputs,
+              usage: accumulatedUsage || {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0
+              }
             }
           });
 
@@ -437,6 +472,12 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
           if (trimmed.startsWith("data: ")) {
             try {
               const dataJson = JSON.parse(trimmed.slice(6));
+
+              // Capture usage from upstream chunks (usually on the final chunk)
+              if (dataJson.usage) {
+                accumulatedUsage = dataJson.usage;
+              }
+
               const choices = dataJson.choices;
               if (Array.isArray(choices) && choices.length > 0) {
                 const delta = choices[0].delta;

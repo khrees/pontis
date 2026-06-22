@@ -6,6 +6,7 @@ import { formatOpenAIToAnthropic } from "./translate/request/openai-to-anthropic
 import { formatOpenAIToAnthropic as toAnthropicResponse } from "./translate/response/openai-to-anthropic";
 import { formatAnthropicToOpenAI as toOpenAIResponse } from "./translate/response/anthropic-to-openai";
 import { streamOpenAIToAnthropic } from "./translate/stream/openai-to-anthropic";
+import { streamAnthropicToOpenAI } from "./translate/stream/anthropic-to-openai";
 import { streamChatToResponses } from "./translate/stream/chat-to-responses";
 
 declare const process: any;
@@ -250,6 +251,7 @@ function selectUpstream(
 async function handleRequest(request: Request): Promise<Response> {
   const route = routeConfig(request);
   const fmt = upstreamFormat(request);
+  const reqUrlPath = new URL(request.url).pathname;
 
   const headersObj: Record<string, string> = {};
   request.headers.forEach((val, key) => {
@@ -387,7 +389,7 @@ async function handleRequest(request: Request): Promise<Response> {
   }
 
   // OpenAI Chat Completions → Anthropic (or pass-through)
-  if (route.path === "/v1/chat/completions" && request.method === "POST") {
+  if ((route.path === "/v1/chat/completions" || reqUrlPath === "/chat/completions" || reqUrlPath === "/v1/chat/completions") && request.method === "POST") {
     const key = extractApiKey(request.headers);
     const req = (await request.json()) as OpenAIRequest;
     const originalModel = req.model || "gpt-5.4-mini";
@@ -578,7 +580,7 @@ async function handleRequest(request: Request): Promise<Response> {
   }
 
   // OpenAI Responses API (used by Codex CLI)
-  if (route.path === "/v1/responses" && request.method === "POST") {
+  if ((route.path === "/v1/responses" || reqUrlPath === "/responses" || reqUrlPath === "/v1/responses") && request.method === "POST") {
     const key = extractApiKey(request.headers);
     const req = (await request.json()) as any;
     const originalModel = req.model || "gpt-5.4-mini";
@@ -797,7 +799,10 @@ async function handleRequest(request: Request): Promise<Response> {
   }
 
   // Model discovery
-  if ((route.path === "/v1/models" || route.path.startsWith("/v1/models/")) && request.method === "GET") {
+  if (request.method === "GET") {
+    const reqUrl = new URL(request.url);
+    const isModelsPath = route.path === "/v1/models" || route.path.startsWith("/v1/models/") || reqUrl.pathname === "/models" || reqUrl.pathname.startsWith("/models/");
+    if (isModelsPath) {
     const key = extractApiKey(request.headers);
     const upstream = getUpstream(request, route.upstream);
     const err = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
@@ -817,10 +822,12 @@ async function handleRequest(request: Request): Promise<Response> {
           });
     if (!res.ok) return upstreamErrorResponse(res, await res.text());
 
-    const url = new URL(request.url);
+    const url = reqUrl;
     const isCodex =
       url.searchParams.has("client_version") ||
-      (request.headers.get("user-agent") || "").toLowerCase().includes("codex");
+      (request.headers.get("user-agent") || "").toLowerCase().includes("codex") ||
+      (request.headers.get("user-agent") || "").toLowerCase().includes("openai") ||
+      typeof process !== "undefined" && process.env.PONTIS_CODEX_MODE === "true";
 
     if (isCodex) {
       const data = (await res.json()) as any;
@@ -919,6 +926,7 @@ async function handleRequest(request: Request): Promise<Response> {
     return new Response(bodyText, {
       headers: { "Content-Type": "application/json" },
     });
+    }
   }
 
   const upstream = getUpstream(request, route.upstream);

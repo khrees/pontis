@@ -1,6 +1,6 @@
 {
   "name": "pontis",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "main": "src/index.ts",
   "scripts": {
     "dev": "npx wrangler dev",
@@ -12,11 +12,12 @@
     "@cloudflare/workers-types": "^4.20260504.1",
     "esbuild": "^0.25.0",
     "pkg": "^5.8.1",
+    "typescript": "^6.0.3",
     "vitest": "^3.2.4",
     "wrangler": "^4.87.0"
   },
   "license": "MIT",
-  "description": "Bidirectional AI API translation gateway for Cloudflare Workers. Anthropic↔OpenAI format bridge.",
+  "description": "A bidirectional translation proxy bridging Anthropic and OpenAI API formats to run Claude Code, Codex CLI, and other terminal-based AI harnesses using local models or OpenCode.",
   "dependencies": {
     "@hono/node-server": "^2.0.5",
     "hono": "^4.12.17"

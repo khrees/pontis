@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'package.json'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Force release tag name (e.g., v2.0.0)'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -18,19 +26,50 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Extract version from package.json
+        id: pkg_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Determine Tag Name
+        id: determine_tag
+        run: |
+          TAG_NAME="${{ github.event.inputs.tag_name }}"
+          if [ -z "$TAG_NAME" ]; then
+            TAG_NAME="${{ steps.pkg_version.outputs.version }}"
+          fi
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Check if tag already exists
+        id: tag_check
+        run: |
+          TAG="${{ steps.determine_tag.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag $TAG already exists."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Tag $TAG is new."
+          fi
+
       - name: Set up Node.js
+        if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
         uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: 'npm'
 
       - name: Install dependencies
+        if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
         run: npm ci
 
       - name: Build proxy JS bundle
+        if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
         run: npx esbuild src/local-server.ts --bundle --platform=node --target=node18 --outfile=dist/proxy.js
 
       - name: Build native binaries
+        if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
         run: |
           mkdir -p dist/bin
           npx pkg dist/proxy.js \
@@ -43,15 +82,25 @@ jobs:
           mv dist/bin/proxy-win-x64.exe dist/bin/pontis-proxy-win-x64.exe
 
       - name: Copy launcher script to dist
+        if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
         run: cp pontis dist/bin/pontis
 
+      - name: Push tag to repository
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          TAG="${{ steps.determine_tag.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
       - name: Create release
+        if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: release-${{ github.run_number }}
+          TAG_NAME: ${{ steps.determine_tag.outputs.tag }}
         run: |
           gh release create "$TAG_NAME" \
             dist/bin/* \
-            --target "$GITHUB_SHA" \
-            --title "$TAG_NAME" \
-            --notes "Automated release with precompiled binaries for $GITHUB_SHA"
+            --title "Pontis $TAG_NAME" \
+            --generate-notes

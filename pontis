@@ -33,6 +33,25 @@ header() {
   echo -e "${LILAC}=============================================${NC}"
 }
 
+if [ "$1" = "update-key" ] || [ "$1" = "--update-key" ]; then
+  header "Update OpenCode API Key"
+  echo ""
+  echo "To get your key:"
+  echo "  1. Go to https://opencode.ai/auth"
+  echo "  2. Sign in / create account"
+  echo "  3. Navigate to Zen → API Keys"
+  echo "  4. Create a new key and copy it"
+  echo ""
+  read -r -p "Enter your OpenCode API Key: " API_KEY
+  if [ -z "$API_KEY" ]; then
+      error "API Key is required."
+  fi
+  echo "$API_KEY" > "$KEY_FILE"
+  chmod 600 "$KEY_FILE"
+  success "Saved API key to $KEY_FILE"
+  exit 0
+fi
+
 # ─────────────────────────────────────────────
 # 1. Select API Provider
 # ─────────────────────────────────────────────
@@ -111,7 +130,7 @@ else
       header "OpenCode API Key Setup"
       echo ""
       echo "To get your key:"
-      echo "  1. Go to https://opencode.ai"
+      echo "  1. Go to https://opencode.ai/auth"
       echo "  2. Sign in / create account"
       echo "  3. Navigate to Zen → API Keys"
       echo "  4. Create a new key and copy it"
@@ -392,6 +411,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Set Codex mode flag so the proxy returns Codex-format models
+if [ "$CLIENT_CMD" = "codex" ]; then
+  export PONTIS_CODEX_MODE=true
+fi
+
 # Start the proxy (run native precompiled binary if present, fallback to bundled JS, fallback to tsx source mode)
 NATIVE_BINARY=""
 if [ -f "$PROXY_DIR/bin/pontis-proxy" ]; then
@@ -516,8 +540,8 @@ if [ "$CLIENT_CMD" = "codex" ]; then
   fi
 
   # Auto-inject the selected model from pontis interactive prompt if not specified by user in CLI arguments
-  if [[ ! " $* " =~ " -m " ]] && [[ ! " $* " =~ " --model " ]]; then
-    set -- -m "$MODEL" "$@"
+  if [[ ! " $* " =~ " --model " ]]; then
+    set -- --model "$MODEL" "$@"
   fi
 elif [ "$CLIENT_CMD" = "claude" ]; then
   # Default to Claude Code
