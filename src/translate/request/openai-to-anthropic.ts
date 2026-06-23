@@ -24,6 +24,11 @@ function imageSourceFromUrl(url: string | undefined): { type: "base64" | "url"; 
   if (match) {
     return { type: "base64", media_type: match[1], data: match[2] };
   }
+  // If it's an HTTP(S) URL, use Anthropic's url source type
+  if (url?.startsWith("http://") || url?.startsWith("https://")) {
+    return { type: "url" as any, url };
+  }
+  // Fallback for unknown formats
   return { type: "base64", media_type: "image/jpeg", data: url || "" };
 }
 

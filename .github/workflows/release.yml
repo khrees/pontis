@@ -85,6 +85,13 @@ jobs:
         if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
         run: cp pontis dist/bin/pontis
 
+      - name: Generate checksums
+        if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
+        run: |
+          cd dist/bin
+          shasum -a 256 * > checksums.sha256
+          cat checksums.sha256
+
       - name: Push tag to repository
         if: steps.tag_check.outputs.exists == 'false'
         run: |

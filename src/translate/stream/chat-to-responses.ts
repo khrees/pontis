@@ -1,6 +1,9 @@
 import type { OpenAIUsage, ResponsesApiUsage, ResponsesOutputItem } from "../../types";
 import { warnLog } from "../../logger";
 
+const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_TEXT_ACCUMULATION = 5 * 1024 * 1024; // 5MB
+
 /**
  * Callback fired when the stream completes, with the final state for caching.
  * The caller can use this to persist conversation state for multi-turn.
@@ -25,6 +28,7 @@ export function streamChatToResponses(
   let buffer = "";
   let hasStreamedReasoning = false;
   let fullText = "";
+  let reasoningText = "";
 
   // Track if the text item was actually emitted (determines output_index for tool calls)
   let textItemWasOutput = false;
@@ -86,6 +90,9 @@ export function streamChatToResponses(
 
   function processTextDelta(text: string, controller: ReadableStreamDefaultController<Uint8Array>) {
     pendingText += text;
+    if (pendingText.length > MAX_TEXT_ACCUMULATION) {
+      pendingText = pendingText.slice(-MAX_TEXT_ACCUMULATION);
+    }
 
     let searchAgain = true;
     while (searchAgain) {
@@ -103,6 +110,9 @@ export function streamChatToResponses(
           if (textBefore) {
             ensureTextItem(controller);
             fullText += textBefore;
+            if (fullText.length > MAX_TEXT_ACCUMULATION) {
+              fullText = fullText.slice(-MAX_TEXT_ACCUMULATION);
+            }
             enqueueSSE(controller, "response.output_text.delta", {
               type: "response.output_text.delta",
               response_id: resolvedId,
@@ -141,6 +151,9 @@ export function streamChatToResponses(
               if (toFlush) {
                 ensureTextItem(controller);
                 fullText += toFlush;
+                if (fullText.length > MAX_TEXT_ACCUMULATION) {
+                  fullText = fullText.slice(-MAX_TEXT_ACCUMULATION);
+                }
                 enqueueSSE(controller, "response.output_text.delta", {
                   type: "response.output_text.delta",
                   response_id: resolvedId,
@@ -155,6 +168,9 @@ export function streamChatToResponses(
             if (pendingText) {
               ensureTextItem(controller);
               fullText += pendingText;
+              if (fullText.length > MAX_TEXT_ACCUMULATION) {
+                fullText = fullText.slice(-MAX_TEXT_ACCUMULATION);
+              }
               enqueueSSE(controller, "response.output_text.delta", {
                 type: "response.output_text.delta",
                 response_id: resolvedId,
@@ -298,11 +314,13 @@ export function streamChatToResponses(
         id: itemId,
         type: "message",
         role: "assistant",
-        content: [{ type: "text", text: fullText }]
+        content: [{ type: "text", text: fullText }],
+        ...(reasoningText ? { reasoning_content: reasoningText } : {})
       });
       textItemStarted = false;
       textContentStarted = false;
       fullText = "";
+      reasoningText = "";
       itemId = "out_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
     }
   }
@@ -523,7 +541,14 @@ export function streamChatToResponses(
           break;
         }
 
-        buffer += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        if (buffer.length > MAX_BUFFER_SIZE) {
+          warnLog('[stream] Buffer exceeded maximum size, aborting');
+          controller.error(new Error('Stream buffer overflow'));
+          reader.releaseLock();
+          return;
+        }
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
 
@@ -547,6 +572,7 @@ export function streamChatToResponses(
                   // Stream reasoning content if present
                   if (delta.reasoning_content) {
                     hasStreamedReasoning = true;
+                    reasoningText += delta.reasoning_content;
                     enqueueSSE(controller, "response.reasoning_text.delta", {
                       type: "response.reasoning_text.delta",
                       response_id: resolvedId,

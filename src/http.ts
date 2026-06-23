@@ -131,10 +131,19 @@ export function upstreamErrorResponse(
     const value = res.headers.get(name);
     if (value) headers.set(name, value);
   }
-  // Attach the request ID header so clients can reference it
   if (requestId) headers.set("X-Request-Id", requestId);
-  // Return the upstream body intact — clients parse their provider's error format
-  return new Response(body, { status: res.status, headers });
+  // Always return JSON to prevent reflected XSS from HTML error pages
+  headers.set("Content-Type", "application/json");
+  let safeBody = body;
+  try {
+    JSON.parse(body); // validate it's already JSON
+  } catch {
+    // Wrap non-JSON error bodies to prevent XSS
+    safeBody = JSON.stringify({
+      error: { type: "upstream_error", message: body.slice(0, 2000) },
+    });
+  }
+  return new Response(safeBody, { status: res.status, headers });
 }
 
 export function jsonResponse(body: unknown, status = 200): Response {

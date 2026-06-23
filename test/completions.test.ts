@@ -24,11 +24,11 @@ describe('completions format translators', () => {
 
     const result = formatAnthropicToOpenAICompletion(anthRequest);
     expect(result.model).toBe('code-davinci-002');
-    expect(result.prompt).toContain('System: You are a coder.');
-    expect(result.prompt).toContain('User: Write a loop');
-    expect(result.prompt).toContain('Assistant: ```js\nwhile(true) {}\n```');
-    expect(result.prompt).toContain('User: Optimize it');
-    expect(result.prompt.endsWith('Assistant:')).toBe(true);
+    expect(result.prompt).toContain('<|system|>\nYou are a coder.\n<|end|>');
+    expect(result.prompt).toContain('<|user|>\nWrite a loop\n<|end|>');
+    expect(result.prompt).toContain('<|assistant|>\n```js\nwhile(true) {}\n```\n<|end|>');
+    expect(result.prompt).toContain('<|user|>\nOptimize it\n<|end|>');
+    expect(result.prompt.endsWith('<|assistant|>\n')).toBe(true);
   });
 
   it('translates OpenAI Completion request to Anthropic message format', () => {
@@ -115,9 +115,14 @@ describe('completions format translators', () => {
 describe('worker completions routing', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    delete process.env.PONTIS_UPSTREAM_URL;
+    delete process.env.PONTIS_UPSTREAM_FORMAT;
   });
 
   it('routes OpenAI completions request to Anthropic upstream messages', async () => {
+    process.env.PONTIS_UPSTREAM_URL = 'https://api.anthropic.com';
+    process.env.PONTIS_UPSTREAM_FORMAT = 'anthropic';
+
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({
         id: 'msg_1',
@@ -135,8 +140,6 @@ describe('worker completions routing', () => {
       headers: {
         'content-type': 'application/json',
         'authorization': `Bearer ${key}`,
-        'x-upstream-url': 'https://api.anthropic.com',
-        'x-upstream-format': 'anthropic'
       },
       body: JSON.stringify({
         model: 'claude-model',
@@ -161,6 +164,9 @@ describe('worker completions routing', () => {
   });
 
   it('routes Anthropic messages to OpenAI completions upstream', async () => {
+    process.env.PONTIS_UPSTREAM_URL = 'https://api.openai.com/v1';
+    process.env.PONTIS_UPSTREAM_FORMAT = 'openai-completions';
+
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({
         id: 'cmpl-1234',
@@ -178,8 +184,6 @@ describe('worker completions routing', () => {
       headers: {
         'content-type': 'application/json',
         'x-api-key': key,
-        'x-upstream-url': 'https://api.openai.com/v1',
-        'x-upstream-format': 'openai-completions'
       },
       body: JSON.stringify({
         model: 'code-davinci-002',
@@ -205,6 +209,9 @@ describe('worker completions routing', () => {
   });
 
   it('routes OpenAI completions request to OpenAI Chat completions upstream', async () => {
+    process.env.PONTIS_UPSTREAM_URL = 'https://api.openai.com/v1';
+    process.env.PONTIS_UPSTREAM_FORMAT = 'openai';
+
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({
         id: 'chatcmpl-test',
@@ -226,8 +233,6 @@ describe('worker completions routing', () => {
       headers: {
         'content-type': 'application/json',
         'authorization': `Bearer ${key}`,
-        'x-upstream-url': 'https://api.openai.com/v1',
-        'x-upstream-format': 'openai'
       },
       body: JSON.stringify({
         model: 'gpt-4',

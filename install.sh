@@ -102,6 +102,30 @@ if ! curl -fL --progress-bar "$BINARY_URL" -o "$TMP_BINARY"; then
 fi
 chmod +x "$TMP_BINARY"
 
+# Verify integrity via SHA256 checksums
+CHECKSUM_URL="https://github.com/$REPO/releases/download/$TAG_NAME/checksums.sha256"
+TMP_CHECKSUMS=$(mktemp)
+if curl -fsSL "$CHECKSUM_URL" -o "$TMP_CHECKSUMS" 2>/dev/null; then
+  info "Verifying file integrity..."
+  LAUNCHER_HASH=$(shasum -a 256 "$TMP_LAUNCHER" | awk '{print $1}')
+  BINARY_HASH=$(shasum -a 256 "$TMP_BINARY" | awk '{print $1}')
+  LAUNCHER_EXPECTED=$(grep "pontis$" "$TMP_CHECKSUMS" | head -1 | awk '{print $1}')
+  BINARY_EXPECTED=$(grep "$ASSET_NAME" "$TMP_CHECKSUMS" | head -1 | awk '{print $1}')
+  if [ -n "$LAUNCHER_EXPECTED" ] && [ "$LAUNCHER_HASH" != "$LAUNCHER_EXPECTED" ]; then
+    rm -f "$TMP_LAUNCHER" "$TMP_BINARY" "$TMP_CHECKSUMS"
+    error "Launcher checksum mismatch! Expected $LAUNCHER_EXPECTED, got $LAUNCHER_HASH. Aborting."
+  fi
+  if [ -n "$BINARY_EXPECTED" ] && [ "$BINARY_HASH" != "$BINARY_EXPECTED" ]; then
+    rm -f "$TMP_LAUNCHER" "$TMP_BINARY" "$TMP_CHECKSUMS"
+    error "Binary checksum mismatch! Expected $BINARY_EXPECTED, got $BINARY_HASH. Aborting."
+  fi
+  rm -f "$TMP_CHECKSUMS"
+  info "✓ File integrity verified"
+else
+  warn "Checksums not available for this release — skipping verification"
+  rm -f "$TMP_CHECKSUMS"
+fi
+
 # Install both launcher and binary to destination
 info "Installing to $INSTALL_DIR..."
 if [ -w "$INSTALL_DIR" ]; then

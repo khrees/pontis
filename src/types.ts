@@ -302,6 +302,7 @@ export interface ResponsesMessageOutputItem {
   type: "message";
   role: "assistant";
   content: ResponsesTextOutput[];
+  reasoning_content?: string;
 }
 
 export interface ResponsesFunctionCallOutputItem {

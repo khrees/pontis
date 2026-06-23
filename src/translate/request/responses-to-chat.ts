@@ -258,7 +258,9 @@ function buildDsmlPrompt(tools: ResponsesApiTool[]): string {
     .map((t) => {
       const name = t.name || t.function?.name || "";
       const desc = t.description || t.function?.description || "";
-      return `- ${name}: ${desc}`;
+      const safeName = name.replace(/[\r\n]+/g, " ").slice(0, 128);
+      const safeDesc = desc.replace(/[\r\n]+/g, " ").slice(0, 500);
+      return `- ${safeName}: ${safeDesc}`;
     })
     .join("\n");
 

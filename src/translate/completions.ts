@@ -9,6 +9,8 @@ import {
 import { extractCachedTokens, extractOutputTokens, extractUncachedInputTokens, extractInputTokens } from '../cache';
 import { warnLog } from '../logger';
 
+const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB
+
 // ==========================================
 // OpenAI Legacy Completion <-> OpenAI Chat
 // ==========================================
@@ -101,6 +103,12 @@ export function streamOpenAIChatToOpenAICompletion(chatStream: ReadableStream<Ui
           if (done) break;
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
+          if (buffer.length > MAX_BUFFER_SIZE) {
+            warnLog('[stream] Buffer exceeded maximum size, aborting');
+            controller.error(new Error('Stream buffer overflow'));
+            reader.releaseLock();
+            return;
+          }
           const parts = buffer.split("\n\n");
           buffer = parts.pop() || "";
           for (const frame of parts) {
@@ -129,7 +137,7 @@ export function formatAnthropicToOpenAICompletion(body: AnthropicRequest): OpenA
       : Array.isArray(system)
         ? system.map(s => typeof s === "string" ? s : (s.text || "")).join("\n")
         : "";
-    if (systemText.trim()) prompt += `System: ${systemText.trim()}\n\n`;
+    if (systemText.trim()) prompt += `<|system|>\n${systemText.trim()}\n<|end|>\n\n`;
   }
   for (const msg of messages || []) {
     const roleName = msg.role === "user" ? "User" : "Assistant";
@@ -145,9 +153,9 @@ export function formatAnthropicToOpenAICompletion(body: AnthropicRequest): OpenA
         return "";
       }).join("\n");
     }
-    prompt += `${roleName}: ${contentText}\n\n`;
+    prompt += `<|${roleName.toLowerCase()}|>\n${contentText}\n<|end|>\n\n`;
   }
-  prompt += "Assistant:";
+  prompt += "<|assistant|>\n";
 
   const data: OpenAICompletionRequest = { model, prompt };
   if (max_tokens !== undefined) data.max_tokens = max_tokens;
@@ -273,6 +281,12 @@ export function streamAnthropicToOpenAICompletion(anthropicStream: ReadableStrea
           if (done) break;
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
+          if (buffer.length > MAX_BUFFER_SIZE) {
+            warnLog('[stream] Buffer exceeded maximum size, aborting');
+            controller.error(new Error('Stream buffer overflow'));
+            reader.releaseLock();
+            return;
+          }
           const parts = buffer.split("\n\n");
           buffer = parts.pop() || "";
           for (const frame of parts) {
@@ -372,6 +386,12 @@ export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<U
           }
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
+          if (buffer.length > MAX_BUFFER_SIZE) {
+            warnLog('[stream] Buffer exceeded maximum size, aborting');
+            controller.error(new Error('Stream buffer overflow'));
+            reader.releaseLock();
+            return;
+          }
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
           for (const line of lines) {

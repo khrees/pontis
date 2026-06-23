@@ -9,8 +9,6 @@ import {
   selectUpstream,
   upstreamFormat,
   VISION_MODEL,
-  GO_UPSTREAM,
-  ZEN_UPSTREAM,
 } from "./config";
 import { handleModelsRequest } from "./handlers/models";
 import { handleResponsesRequest } from "./handlers/responses";
@@ -212,7 +210,10 @@ async function handleRequest(request: Request): Promise<Response> {
       }
 
       for (const msg of req.messages || []) {
-        if (msg.role === "developer") msg.role = "system";
+        if (msg.role === "developer") {
+          msg.role = "system";
+          debugLog(`[${reqId}] Rewriting developer role message to system for upstream compatibility`);
+        }
       }
 
       const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
@@ -337,14 +338,11 @@ async function handleRequest(request: Request): Promise<Response> {
     }
   }
 
-  const upstream = getUpstream(request, route.upstream);
   return jsonResponse(
     {
       name: "pontis-proxy",
       version: "1.0.0",
-      upstream,
       request_id: reqId,
-      routes: { "/go": GO_UPSTREAM, "/zen": ZEN_UPSTREAM },
       endpoints: {
         "/v1/messages": "Anthropic → upstream (translated when upstream is OpenAI)",
         "/v1/chat/completions": "OpenAI Chat → upstream (translated when upstream is Anthropic)",
@@ -359,6 +357,28 @@ async function handleRequest(request: Request): Promise<Response> {
 
 const app = new Hono();
 app.use("*", logger());
+
+// Security headers + CORS (H3, L1)
+app.use("*", async (c, next) => {
+  // CORS: only allow localhost origins
+  const origin = c.req.header("Origin");
+  if (origin) {
+    try {
+      const url = new URL(origin);
+      if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+        c.header("Access-Control-Allow-Origin", origin);
+        c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        c.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta");
+      }
+    } catch {}
+    if (c.req.method === "OPTIONS") return c.body(null, 204);
+  }
+  await next();
+  // Security headers
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+});
+
 app.get("/install", (c) =>
   c.redirect("https://raw.githubusercontent.com/khrees/pontis/main/install.sh", 302),
 );

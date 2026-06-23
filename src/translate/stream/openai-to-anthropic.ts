@@ -2,6 +2,8 @@ import { extractCachedTokens, extractOutputTokens, extractUncachedInputTokens } 
 import { warnLog } from '../../logger';
 import { OpenAIUsage } from '../../types';
 
+const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB
+
 interface StreamDelta {
   tool_calls?: {
     id?: string;
@@ -245,6 +247,12 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream<Uint8Array>
 
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
+          if (buffer.length > MAX_BUFFER_SIZE) {
+            warnLog('[stream] Buffer exceeded maximum size, aborting');
+            controller.error(new Error('Stream buffer overflow'));
+            reader.releaseLock();
+            return;
+          }
 
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';

@@ -4,6 +4,8 @@
 import { OpenAIMessage } from '../../types';
 import { warnLog } from '../../logger';
 
+const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB
+
 interface AnthropicSSEEvent {
   type: string;
   index?: number;
@@ -148,6 +150,12 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream<Uint8Arr
 
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
+          if (buffer.length > MAX_BUFFER_SIZE) {
+            warnLog('[stream] Buffer exceeded maximum size, aborting');
+            controller.error(new Error('Stream buffer overflow'));
+            reader.releaseLock();
+            return;
+          }
 
           // Process complete SSE frames (delimited by double newline)
           const parts = buffer.split("\n\n");

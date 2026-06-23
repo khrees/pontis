@@ -1318,4 +1318,80 @@ describe("Responses API integration", () => {
     expect(Array.isArray(model.experimental_supported_tools)).toBe(true);
     expect(model.experimental_supported_tools.length).toBeGreaterThan(0);
   });
+
+  it("preserves and passes reasoning_content back to upstream in subsequent turns", async () => {
+    const { default: worker } = await import("../src/index");
+    let capturedBody: any = null;
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (url, init?: RequestInit) => {
+        if (init?.body) {
+          capturedBody = JSON.parse(init.body as string);
+        }
+        return new Response(
+          JSON.stringify({
+            id: "chatcmpl-test",
+            object: "chat.completion",
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: "Final answer text",
+                  reasoning_content: "First turn thinking process"
+                },
+                finish_reason: "stop"
+              }
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 15 }
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    );
+
+    // Turn 1
+    const request1 = new Request("https://proxy.example/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${"a".repeat(32)}`
+      },
+      body: JSON.stringify({
+        model: "mimo-v2.5-free",
+        input: [{ role: "user", content: [{ type: "input_text", text: "Hello" }] }]
+      })
+    });
+
+    const response1 = await worker.fetch(request1);
+    expect(response1.status).toBe(200);
+    const data1 = await response1.json() as any;
+    const responseId = data1.id;
+    expect(responseId).toBeDefined();
+
+    // Turn 2
+    const request2 = new Request("https://proxy.example/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${"a".repeat(32)}`
+      },
+      body: JSON.stringify({
+        model: "mimo-v2.5-free",
+        previous_response_id: responseId,
+        input: [{ role: "user", content: [{ type: "input_text", text: "Next question" }] }]
+      })
+    });
+
+    const response2 = await worker.fetch(request2);
+    expect(response2.status).toBe(200);
+
+    // Verify upstream request in Turn 2 included reasoning_content in the history
+    expect(capturedBody).toBeDefined();
+    const assistantMsg = capturedBody.messages.find((m: any) => m.role === "assistant");
+    expect(assistantMsg).toBeDefined();
+    expect(assistantMsg.reasoning_content).toBe("First turn thinking process");
+    expect(assistantMsg.content).toBe("Final answer text");
+
+    vi.restoreAllMocks();
+  });
 });

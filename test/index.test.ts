@@ -19,9 +19,14 @@ const key = 'a'.repeat(32);
 describe('worker routing', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    delete process.env.PONTIS_UPSTREAM_URL;
+    delete process.env.PONTIS_UPSTREAM_FORMAT;
   });
 
   it('routes /v1/models to Anthropic models endpoint with Anthropic headers', async () => {
+    process.env.PONTIS_UPSTREAM_URL = 'https://api.anthropic.com';
+    process.env.PONTIS_UPSTREAM_FORMAT = 'anthropic';
+
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('{"data":[]}', { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
@@ -29,8 +34,6 @@ describe('worker routing', () => {
     const request = new Request('https://proxy.example/v1/models', {
       headers: {
         'x-api-key': key,
-        'x-upstream-url': 'https://api.anthropic.com',
-        'x-upstream-format': 'anthropic',
         'anthropic-version': '2023-06-01',
         'anthropic-beta': 'tools-2024-04-04',
       },
@@ -50,6 +53,9 @@ describe('worker routing', () => {
   });
 
   it('forwards Anthropic beta header when translating OpenAI requests to Anthropic', async () => {
+    process.env.PONTIS_UPSTREAM_URL = 'https://api.anthropic.com';
+    process.env.PONTIS_UPSTREAM_FORMAT = 'anthropic';
+
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }), {
         status: 200,
@@ -62,8 +68,6 @@ describe('worker routing', () => {
       headers: {
         'content-type': 'application/json',
         'authorization': `Bearer ${key}`,
-        'x-upstream-url': 'https://api.anthropic.com',
-        'x-upstream-format': 'anthropic',
         'anthropic-beta': 'tools-2024-04-04',
       },
       body: JSON.stringify({ model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] }),

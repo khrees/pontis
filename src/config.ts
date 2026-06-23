@@ -113,7 +113,6 @@ export function routeConfig(request: Request): RouteConfig {
 
 export function getUpstream(request: Request, routeUpstream: string): string {
   return (
-    request.headers.get("X-Upstream-Url") ||
     process?.env?.PONTIS_UPSTREAM_URL ||
     routeUpstream
   );
@@ -123,7 +122,6 @@ export function upstreamFormat(
   request: Request,
 ): "openai" | "anthropic" | "openai-completions" {
   const fmt = (
-    request.headers.get("X-Upstream-Format") ||
     process?.env?.PONTIS_UPSTREAM_FORMAT ||
     "openai"
   ).toLowerCase();
@@ -143,8 +141,7 @@ export function selectUpstream(
   routeUpstream: string,
   model: string,
 ): string {
-  const targetUpstream =
-    request.headers.get("X-Upstream-Url") || process?.env?.PONTIS_UPSTREAM_URL;
+  const targetUpstream = process?.env?.PONTIS_UPSTREAM_URL;
   if (targetUpstream) return targetUpstream;
 
   const path = new URL(request.url).pathname;

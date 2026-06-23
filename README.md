@@ -52,7 +52,7 @@ This clones Pontis to `~/.pontis`, configures local dependencies, and sets up th
    pontis
    ```
 2. Select your **API Provider**:
-   * **OpenCode (Zen/Go)**: Enter your OpenCode API Key when prompted (get one from [opencode.ai](https://opencode.ai)).
+   * **OpenCode (Zen/Go)**: Enter your OpenCode API Key when prompted (get one from [opencode.ai](https://opencode.ai/auth)).
    * **Local Models**: Choose from Ollama, LM Studio, Llama.cpp, or enter a custom URL.
 3. Select one of the dynamically fetched models available on that provider.
 4. Claude Code will boot up automatically using your chosen model configuration!
@@ -61,8 +61,8 @@ This clones Pontis to `~/.pontis`, configures local dependencies, and sets up th
 You can direct Pontis to launch a specific client interface directly:
 
 * **Claude Code**: `pontis claude`
-* **Codex CLI**: `pontis codex`
-* **Standalone Server**: `pontis standalone` (keeps only the proxy server running on `http://localhost:8787` for external API connections)
+* **Codex**: `pontis codex`
+* **Standalone Server**: `pontis server` (keeps only the proxy server running on `http://localhost:8787` for external API connections)
 
 ---
 
@@ -91,7 +91,7 @@ To run the proxy and Codex separately:
 
 ```bash
 # Terminal 1 — start the proxy
-pontis standalone
+pontis server
 
 # Terminal 2 — launch Codex
 export OPENAI_BASE_URL="http://localhost:8787/v1"

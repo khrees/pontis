@@ -11,6 +11,9 @@ import {
   writeFileSync,
   existsSync,
   createWriteStream,
+  statSync,
+  readdirSync,
+  mkdirSync,
 } from "node:fs";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
@@ -66,7 +69,8 @@ const KEY_FILE = join(homedir(), ".opencode_api_key");
 const CACHE_FILE = join(homedir(), ".pontis_models_cache.json");
 const DIST_PROXY = join(ROOT, "dist", "proxy.js");
 const SRC_DIR = join(ROOT, "src");
-const PROXY_LOG = "/tmp/pontis_proxy.log";
+const PONTIS_DIR = join(homedir(), ".pontis");
+const PROXY_LOG = join(PONTIS_DIR, "proxy.log");
 const FALLBACK_MODELS = [
   "mimo-v2.5-free",
   "deepseek-v4-flash-free",
@@ -220,6 +224,31 @@ function kv(key: string, value: string) {
 }
 
 // ══════════════════════════════════════════════════════════════
+//  STRUCTURED OUTPUT (--json flag)
+// ══════════════════════════════════════════════════════════════
+
+/** Global flag: true when --json is passed anywhere in argv. */
+const jsonMode = process.argv.includes("--json");
+
+/** Output structured JSON and exit. */
+function outputJson(data: Record<string, unknown>): never {
+  console.log(JSON.stringify(data, null, 2));
+  process.exit(0);
+}
+
+/** Output a structured error and exit with code 1. */
+function outputJsonError(
+  code: string,
+  message: string,
+  extra?: Record<string, unknown>,
+): never {
+  console.log(
+    JSON.stringify({ error: true, code, message, ...extra }, null, 2),
+  );
+  process.exit(1);
+}
+
+// ══════════════════════════════════════════════════════════════
 //  API KEY MANAGEMENT
 // ══════════════════════════════════════════════════════════════
 
@@ -237,8 +266,7 @@ async function cmdUpdateKey(keyArg?: string) {
     badge("error", "API key is required.");
     process.exit(1);
   }
-  writeFileSync(KEY_FILE, apiKey.trim(), "utf-8");
-  execSync(`chmod 600 "${KEY_FILE}"`);
+  writeFileSync(KEY_FILE, apiKey.trim(), { encoding: "utf-8", mode: 0o600 });
   badge("success", `Saved to ${KEY_FILE}`);
 }
 
@@ -368,8 +396,7 @@ async function getOpenCodeApiKeyInteractive(): Promise<string> {
   }
   const save = await confirm("Save this key for future use?", true);
   if (save) {
-    writeFileSync(KEY_FILE, key.trim(), "utf-8");
-    execSync(`chmod 600 "${KEY_FILE}"`);
+    writeFileSync(KEY_FILE, key.trim(), { encoding: "utf-8", mode: 0o600 });
     badge("success", "Key saved to " + KEY_FILE);
   }
   return key.trim();
@@ -437,7 +464,7 @@ async function fetchWorkingOpenCodeModels(apiKey: string): Promise<string[]> {
       writeFileSync(
         CACHE_FILE,
         JSON.stringify({ timestamp: Date.now(), models: working }),
-        "utf-8",
+        { encoding: "utf-8", mode: 0o600 },
       );
     }
     return working;
@@ -495,11 +522,11 @@ async function selectProviderInteractive(): Promise<"opencode" | "local"> {
 async function selectClientInteractive(): Promise<string> {
   const result = await select("Launch which client?", [
     `${t.primary("Claude Code")}  ${t.muted("Anthropic's AI coding assistant")}`,
-    `${t.primary("Codex CLI")}    ${t.muted("OpenAI's terminal coding agent")}`,
-    `${t.primary("Standalone")}   ${t.muted("Proxy server only (no client)")}`,
+    `${t.primary("Codex")}    ${t.muted("OpenAI's terminal coding agent")}`,
+    `${t.primary("Server")}   ${t.muted("Run proxy server only (no client launcher)")}`,
   ]);
   if (result.index === 1) return "codex";
-  if (result.index === 2) return "standalone";
+  if (result.index === 2) return "server";
   return "claude";
 }
 
@@ -512,7 +539,10 @@ let activeProxy: { pid: number } | null = null;
 
 /** Register a one-shot shutdown handler. */
 function onShutdown(handler: () => void) {
-  const done = () => { handler(); process.exit(0); };
+  const done = () => {
+    handler();
+    process.exit(0);
+  };
   process.on("SIGINT", done);
   process.on("SIGTERM", done);
 }
@@ -524,12 +554,15 @@ function onShutdown(handler: () => void) {
 function needsProxyRebuild(): boolean {
   if (!existsSync(DIST_PROXY)) return true;
   try {
-    const newer = execSync(
-      `find "${SRC_DIR}" -name '*.ts' -newer "${DIST_PROXY}" 2>/dev/null`,
-    )
-      .toString()
-      .trim();
-    return newer.length > 0;
+    const distMtime = statSync(DIST_PROXY).mtimeMs;
+    const entries = readdirSync(SRC_DIR, { recursive: true });
+    for (const entry of entries) {
+      const name = typeof entry === "string" ? entry : String(entry);
+      if (name.endsWith(".ts")) {
+        if (statSync(join(SRC_DIR, name)).mtimeMs > distMtime) return true;
+      }
+    }
+    return false;
   } catch {
     return true;
   }
@@ -566,8 +599,13 @@ async function startProxy(model: string, codexMode: boolean): Promise<number> {
     const existing = execSync(`lsof -t -i :${PORT} 2>/dev/null || true`)
       .toString()
       .trim();
-    if (existing) {
-      execSync(`kill -9 ${existing} 2>/dev/null || true`);
+    // Validate output contains only PIDs (digits) to prevent command injection
+    if (existing && /^\d+(\s+\d+)*$/.test(existing)) {
+      for (const pid of existing.split(/\s+/)) {
+        try {
+          process.kill(parseInt(pid, 10), 9);
+        } catch {}
+      }
       await new Promise((r) => setTimeout(r, 500));
     }
   } catch {}
@@ -610,7 +648,9 @@ async function startProxy(model: string, codexMode: boolean): Promise<number> {
     );
   }
 
-  const logStream = createWriteStream(PROXY_LOG, { flags: "a" });
+  if (!existsSync(PONTIS_DIR))
+    mkdirSync(PONTIS_DIR, { mode: 0o700, recursive: true });
+  const logStream = createWriteStream(PROXY_LOG, { flags: "a", mode: 0o600 });
   child.stdout?.pipe(logStream);
   child.stderr?.pipe(logStream);
 
@@ -635,7 +675,9 @@ async function startProxy(model: string, codexMode: boolean): Promise<number> {
   // Track for graceful shutdown
   activeProxy = { pid: child.pid! };
   onShutdown(() => {
-    try { process.kill(activeProxy!.pid, "SIGTERM"); } catch {}
+    try {
+      process.kill(activeProxy!.pid, "SIGTERM");
+    } catch {}
   });
 
   spin.stop({
@@ -706,16 +748,25 @@ function autoApproveClaudeKey(apiKey: string) {
       if (!config.customApiKeyResponses) config.customApiKeyResponses = {};
       if (!config.customApiKeyResponses.approved)
         config.customApiKeyResponses.approved = [];
+      // Respect the user's decision — never override a rejected key
+      if (
+        Array.isArray(config.customApiKeyResponses.rejected) &&
+        config.customApiKeyResponses.rejected.includes(keySuffix)
+      ) {
+        badge(
+          "warning",
+          "API key was previously rejected in Claude — skipping auto-approval",
+        );
+        return;
+      }
       if (!config.customApiKeyResponses.approved.includes(keySuffix)) {
         config.customApiKeyResponses.approved.push(keySuffix);
+        badge("muted", "Auto-approved Pontis API key in ~/.claude.json");
       }
-      if (config.customApiKeyResponses.rejected) {
-        config.customApiKeyResponses.rejected =
-          config.customApiKeyResponses.rejected.filter(
-            (k: string) => k !== keySuffix,
-          );
-      }
-      writeFileSync(configFile, JSON.stringify(config, null, 2), "utf-8");
+      writeFileSync(configFile, JSON.stringify(config, null, 2), {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
     }
   } catch {}
 }
@@ -729,9 +780,9 @@ function launchClient(
   section(
     "Launching " +
       (clientCmd === "codex"
-        ? "Codex CLI"
-        : clientCmd === "standalone"
-          ? "Standalone Mode"
+        ? "Codex"
+        : clientCmd === "server"
+          ? "Server Mode"
           : "Claude Code"),
   );
 
@@ -740,7 +791,7 @@ function launchClient(
   if (extraArgs.length > 0) kv("Args", t.muted(extraArgs.join(" ")));
   console.log();
 
-  if (clientCmd === "standalone") {
+  if (clientCmd === "server") {
     badge("info", "Proxy is live — connect your clients");
     console.log(`  ${t.muted("Press Ctrl+C to stop\n")}`);
     return new Promise(() => {}); // hang
@@ -847,7 +898,9 @@ async function runInteractiveWizard(env: PontisEnv) {
     await launchClient(clientCmd, model, apiKey, []);
   } finally {
     if (activeProxy) {
-      try { process.kill(activeProxy.pid, "SIGTERM"); } catch {}
+      try {
+        process.kill(activeProxy.pid, "SIGTERM");
+      } catch {}
       activeProxy = null;
     }
     // Remove our shutdown handlers so they don't fire during normal exit
@@ -918,9 +971,9 @@ async function runWithConfig(
   kv(
     "Mode",
     clientCmd === "codex"
-      ? "Codex CLI"
-      : clientCmd === "standalone"
-        ? "Standalone"
+      ? "Codex"
+      : clientCmd === "server"
+        ? "Server"
         : "Claude Code",
   );
   kv("Provider", provider === "local" ? "Local" : "OpenCode");
@@ -936,7 +989,9 @@ async function runWithConfig(
     await launchClient(clientCmd, model, apiKey, extraArgs);
   } finally {
     if (activeProxy) {
-      try { process.kill(activeProxy.pid, "SIGTERM"); } catch {}
+      try {
+        process.kill(activeProxy.pid, "SIGTERM");
+      } catch {}
       activeProxy = null;
     }
     process.removeAllListeners("SIGINT");
@@ -953,7 +1008,10 @@ const program = new Command();
 program
   .name("pontis")
   .version(VERSION)
-  .description("Bridge between OpenCode/Local models and AI CLI harnesses");
+  .description(
+    "Translation proxy bridging Anthropic/OpenAI formats to run Claude Code, Codex, and local models",
+  )
+  .option("--json", "Output in JSON format (for scripting)");
 
 function addPontisOptions(cmd: Command) {
   return cmd
@@ -971,7 +1029,7 @@ function addPontisOptions(cmd: Command) {
 addPontisOptions(
   program
     .command("claude")
-    .description("Launch Claude Code")
+    .description("Start proxy and launch Claude Code with a configured model")
     .allowUnknownOption(true)
     .allowExcessArguments(true),
 ).action((opts) => {
@@ -985,7 +1043,7 @@ addPontisOptions(
 addPontisOptions(
   program
     .command("codex")
-    .description("Launch OpenAI Codex CLI")
+    .description("Start proxy and launch Codex with a configured model")
     .allowUnknownOption(true)
     .allowExcessArguments(true),
 ).action((opts) => {
@@ -995,13 +1053,13 @@ addPontisOptions(
   });
 });
 
-// Subcommand: standalone
+// Subcommand: server
 addPontisOptions(
   program
-    .command("standalone")
-    .description("Run proxy server only (no client)"),
+    .command("server")
+    .description("Start the proxy server without launching a client"),
 ).action((opts) => {
-  runWithConfig("standalone", opts, []).catch((e) => {
+  runWithConfig("server", opts, []).catch((e) => {
     console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
     process.exit(1);
   });
@@ -1017,6 +1075,179 @@ program
       console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
       process.exit(1);
     });
+  });
+
+// Subcommand: models — list available models
+program
+  .command("models")
+  .description("List available models from the configured provider")
+  .option("-p, --provider <type>", "Provider: opencode | local")
+  .option("-u, --upstream <url>", "Upstream endpoint URL")
+  .action(async (opts) => {
+    try {
+      const provider: "opencode" | "local" =
+        opts.provider ||
+        (process.env.PONTIS_PROVIDER as "opencode" | "local") ||
+        (process.env.PONTIS_UPSTREAM_URL ? "local" : "opencode");
+
+      let upstreamUrl = opts.upstream || process.env.PONTIS_UPSTREAM_URL;
+
+      if (provider === "opencode") {
+        const apiKey =
+          process.env.OPENCODE_API_KEY ||
+          (existsSync(KEY_FILE) ? readFileSync(KEY_FILE, "utf-8").trim() : "");
+        if (!apiKey) {
+          if (jsonMode)
+            outputJsonError(
+              "missing_api_key",
+              "No OpenCode API key found. Set OPENCODE_API_KEY or run: pontis update-key",
+            );
+          badge(
+            "error",
+            "No OpenCode API key found. Set OPENCODE_API_KEY or run: pontis update-key",
+          );
+          process.exit(1);
+        }
+        const spin = jsonMode
+          ? null
+          : createSpinner("Fetching models from OpenCode...");
+        const models = await fetchWorkingOpenCodeModels(apiKey);
+        if (spin)
+          spin.stop(
+            models.length > 0
+              ? {
+                  type: "success",
+                  text: `Found ${models.length} model${models.length === 1 ? "" : "s"}`,
+                }
+              : { type: "warning", text: "No models found" },
+          );
+        if (jsonMode) {
+          outputJson({
+            provider: "opencode",
+            models: models.map((id) => ({ id })),
+          });
+        }
+        if (models.length === 0) {
+          badge("warning", "No models found. Check your API key.");
+        } else {
+          section("Available Models");
+          for (const m of models) kv("Model", t.primary(m));
+        }
+      } else {
+        if (!upstreamUrl) {
+          if (jsonMode)
+            outputJsonError(
+              "missing_upstream",
+              "Set --upstream or PONTIS_UPSTREAM_URL for local provider",
+            );
+          badge(
+            "error",
+            "Set --upstream or PONTIS_UPSTREAM_URL for local provider",
+          );
+          process.exit(1);
+        }
+        const apiKey =
+          process.env.LOCAL_API_KEY || process.env.OPENAI_API_KEY || "";
+        const spin = jsonMode
+          ? null
+          : createSpinner(`Scanning models at ${upstreamUrl}...`);
+        const models = await fetchLocalModels(upstreamUrl, apiKey);
+        if (spin)
+          spin.stop(
+            models.length > 0
+              ? {
+                  type: "success",
+                  text: `Found ${models.length} model${models.length === 1 ? "" : "s"}`,
+                }
+              : { type: "warning", text: "No models returned from upstream" },
+          );
+        if (jsonMode) {
+          outputJson({
+            provider: "local",
+            upstream: upstreamUrl,
+            models: models.map((id) => ({ id })),
+          });
+        }
+        if (models.length === 0) {
+          badge("warning", "No models returned from upstream. Is it running?");
+        } else {
+          section("Available Models");
+          for (const m of models) kv("Model", t.primary(m));
+        }
+      }
+    } catch (e: any) {
+      if (jsonMode) outputJsonError("fetch_failed", e.message || String(e));
+      console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
+      process.exit(1);
+    }
+  });
+
+// Subcommand: status — show proxy and configuration status
+program
+  .command("status")
+  .description("Show current proxy and configuration status")
+  .action(async () => {
+    try {
+      let proxyRunning = false;
+      let proxyPort = PORT;
+
+      // Check if proxy is running by hitting the root endpoint
+      try {
+        const res = await fetch(PROXY_URL + "/", {
+          signal: AbortSignal.timeout(2000),
+        });
+        if (res.ok) proxyRunning = true;
+      } catch {}
+
+      const provider: string =
+        process.env.PONTIS_PROVIDER ||
+        (process.env.PONTIS_UPSTREAM_URL ? "local" : "opencode");
+      const model = process.env.PONTIS_MODEL || FALLBACK_MODELS[0];
+      const upstream =
+        process.env.PONTIS_UPSTREAM_URL || "(default OpenCode Zen)";
+      const format = process.env.PONTIS_UPSTREAM_FORMAT || "openai";
+      const debug = process.env.PONTIS_DEBUG === "true";
+      const keyExists = existsSync(KEY_FILE);
+
+      if (jsonMode) {
+        outputJson({
+          proxy: { running: proxyRunning, port: proxyPort, url: PROXY_URL },
+          provider,
+          model,
+          upstream,
+          format,
+          debug,
+          apiKeySaved: keyExists,
+          logs: PROXY_LOG,
+        });
+      }
+
+      section("Pontis Status");
+
+      if (proxyRunning) {
+        badge("success", `Proxy running on ${t.secondary(PROXY_URL)}`);
+      } else {
+        badge(
+          "warning",
+          `Proxy not running (start with: ${t.secondary("pontis server")})`,
+        );
+      }
+
+      console.log();
+      section("Configuration");
+      kv("Provider", t.primary(provider));
+      kv("Model", t.primary(model));
+      kv("Upstream", t.muted(upstream));
+      kv("Format", format);
+      kv("Debug", debug ? t.success("on") : t.muted("off"));
+      kv("API Key", keyExists ? t.success("saved") : t.warning("not found"));
+      kv("Logs", t.muted(PROXY_LOG));
+      console.log();
+    } catch (e: any) {
+      if (jsonMode) outputJsonError("status_failed", e.message || String(e));
+      console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
+      process.exit(1);
+    }
   });
 
 // Default (no subcommand): interactive wizard
@@ -1051,6 +1282,7 @@ const KNOWN_PONTIS_FLAGS = new Set([
   "--upstream",
   "-f",
   "--format",
+  "--json",
 ]);
 
 function extractChildArgs(subcommand: string): string[] {

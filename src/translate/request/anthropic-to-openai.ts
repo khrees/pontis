@@ -9,14 +9,38 @@ import {
   OpenAIToolCall
 } from '../../types';
 
+const SAFE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"]);
+
+function isValidImageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return false;
+    // Block private/internal IPs
+    const host = parsed.hostname;
+    if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0") return false;
+    if (host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.")) return false;
+    if (host.startsWith("172.")) {
+      const second = parseInt(host.split(".")[1], 10);
+      if (second >= 16 && second <= 31) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function translateImageBlock(part: AnthropicImageBlock): OpenAIContentPart | null {
   const src = part.source;
   if (!src) return null;
   if (src.type === "url" && src.url) {
+    if (!isValidImageUrl(src.url)) {
+      return { type: "text" as const, text: "[Image URL blocked: private/invalid URL]" };
+    }
     return { type: "image_url", image_url: { url: src.url } };
   }
   if (src.type === "base64") {
-    return { type: "image_url", image_url: { url: `data:${src.media_type};base64,${src.data}` } };
+    const safeMediaType = SAFE_IMAGE_TYPES.has(src.media_type || "") ? src.media_type : "image/jpeg";
+    return { type: "image_url", image_url: { url: `data:${safeMediaType};base64,${src.data}` } };
   }
   return null;
 }
