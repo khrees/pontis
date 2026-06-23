@@ -6,8 +6,7 @@ import {
   upstreamFormat,
   type RouteConfig,
 } from "../config";
-import { fetchWithTimeout } from "../http";
-import { anthropicHeaders, jsonResponse, upstreamErrorResponse } from "../http";
+import { fetchWithTimeout, anthropicHeaders, jsonResponse, upstreamErrorResponse } from "../http";
 import {
   buildCodexModelEntry,
   KNOWN_MODEL_METADATA,
@@ -29,8 +28,8 @@ export async function handleModelsRequest(
   route: RouteConfig,
 ): Promise<Response> {
   const key = extractApiKey(request.headers);
-  const upstream = getUpstream(request, route.upstream);
-  const fmt = upstreamFormat(request);
+  const upstream = getUpstream(route.upstream);
+  const fmt = upstreamFormat();
   const authErr = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
   if (authErr) return authErrorResponse(authErr);
 

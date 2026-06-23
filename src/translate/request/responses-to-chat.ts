@@ -171,9 +171,11 @@ function inputItemToMessages(inputItem: ResponseInputItem): OpenAIMessage[] {
   }
 
   if (inputItem.type === "message") {
+    const reasoning = inputItem.reasoning_content || (inputItem as any).reasoning;
     return inputItemToMessages({
       role: inputItem.role || "user",
       content: inputItem.content,
+      ...(reasoning ? { reasoning_content: reasoning } : {}),
     });
   }
 
@@ -223,12 +225,17 @@ function inputItemToMessages(inputItem: ResponseInputItem): OpenAIMessage[] {
       role: "assistant",
       content: textParts.length > 0 ? textParts.join("\n").trim() || null : null,
     };
+    const reasoning = inputItem.reasoning_content || (inputItem as any).reasoning;
+    if (reasoning) {
+      msg.reasoning_content = reasoning;
+      (msg as any).reasoning = reasoning;
+    }
     if (toolUses.length > 0) {
       msg.tool_calls = toolUses.map((tu) =>
         makeToolCall(tu.id, tu.name, tu.arguments),
       );
     }
-    if (msg.content !== null || (msg.tool_calls && msg.tool_calls.length > 0)) {
+    if (msg.content !== null || msg.reasoning_content || (msg as any).reasoning || (msg.tool_calls && msg.tool_calls.length > 0)) {
       return [msg];
     }
     return [];
@@ -288,6 +295,74 @@ function convertTools(reqTools: ResponsesApiTool[]): OpenAITool[] {
     }));
 }
 
+export function mergeConsecutiveMessages(messages: OpenAIMessage[]): OpenAIMessage[] {
+  if (messages.length === 0) return [];
+  const merged: OpenAIMessage[] = [];
+
+  for (const msg of messages) {
+    if (merged.length === 0) {
+      merged.push({ ...msg });
+      continue;
+    }
+
+    const last = merged[merged.length - 1];
+    if (last.role === msg.role && msg.role !== "tool") {
+      if (last.role === "assistant") {
+        if (msg.content) {
+          if (last.content) {
+            last.content = `${last.content}\n${msg.content}`;
+          } else {
+            last.content = msg.content;
+          }
+        }
+        const lastReasoning = last.reasoning_content || (last as any).reasoning;
+        const msgReasoning = msg.reasoning_content || (msg as any).reasoning;
+        if (msgReasoning) {
+          if (lastReasoning) {
+            const combined = `${lastReasoning}\n${msgReasoning}`;
+            last.reasoning_content = combined;
+            (last as any).reasoning = combined;
+          } else {
+            last.reasoning_content = msgReasoning;
+            (last as any).reasoning = msgReasoning;
+          }
+        }
+        if (msg.tool_calls && msg.tool_calls.length > 0) {
+          last.tool_calls = [...(last.tool_calls || []), ...msg.tool_calls];
+        }
+      } else if (last.role === "user") {
+        if (msg.content) {
+          if (typeof last.content === "string" && typeof msg.content === "string") {
+            last.content = `${last.content}\n${msg.content}`;
+          } else {
+            const lastParts = typeof last.content === "string"
+              ? [{ type: "text" as const, text: last.content }]
+              : last.content || [];
+            const msgParts = typeof msg.content === "string"
+              ? [{ type: "text" as const, text: msg.content }]
+              : msg.content || [];
+            last.content = [...lastParts, ...msgParts];
+          }
+        }
+      } else if (last.role === "system" || last.role === "developer") {
+        if (msg.content) {
+          if (last.content) {
+            last.content = `${last.content}\n${msg.content}`;
+          } else {
+            last.content = msg.content;
+          }
+        }
+      } else {
+        merged.push({ ...msg });
+      }
+    } else {
+      merged.push({ ...msg });
+    }
+  }
+
+  return merged;
+}
+
 export interface ResponsesToChatResult {
   messages: OpenAIMessage[];
 }
@@ -343,7 +418,7 @@ export function responsesToChatMessages(
     }
   }
 
-  return { messages };
+  return { messages: mergeConsecutiveMessages(messages) };
 }
 
 export function buildChatRequest(
@@ -381,12 +456,13 @@ export function chatResponseToOutput(message: Partial<OpenAIMessage>): {
   const textContent =
     typeof message.content === "string" ? message.content : "";
 
-  if (textContent) {
+  if (textContent || message.reasoning_content) {
     output.push({
       id: "out_" + Date.now(),
       type: "message",
       role: "assistant",
       content: [{ type: "text", text: textContent }],
+      ...(message.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
     });
   }
 

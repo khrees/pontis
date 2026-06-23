@@ -1,5 +1,7 @@
 declare const process: { env?: Record<string, string | undefined> };
 
+import { warnLog } from "./logger";
+
 export const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
   "Cache-Control": "no-cache",
@@ -151,4 +153,39 @@ export function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+/**
+ * Wraps a proxy request handler with standard error handling.
+ * Catches AbortError (timeout) and generic errors, returning appropriate error responses.
+ */
+export async function wrapProxyRequest(
+  reqId: string,
+  handler: () => Promise<Response>,
+): Promise<Response> {
+  try {
+    return await handler();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      warnLog(`[${reqId}] Upstream request timed out`);
+      return proxyErrorResponse("upstream_timeout", "Upstream did not respond in time", { requestId: reqId });
+    }
+    warnLog(`[${reqId}] Request failed: ${err instanceof Error ? err.message : String(err)}`);
+    return proxyErrorResponse("proxy_error", err instanceof Error ? err.message : String(err), { requestId: reqId });
+  }
+}
+
+/**
+ * Build a passthrough response preserving key headers from the upstream.
+ * Used when no format translation is needed (same-format proxying).
+ */
+export function passthroughResponse(res: Response): Response {
+  const headers: Record<string, string> = {
+    "Content-Type": res.headers.get("Content-Type") || "application/json",
+  };
+  const cacheControl = res.headers.get("Cache-Control");
+  if (cacheControl) headers["Cache-Control"] = cacheControl;
+  const connection = res.headers.get("Connection");
+  if (connection) headers["Connection"] = connection;
+  return new Response(res.body, { status: res.status, headers });
 }

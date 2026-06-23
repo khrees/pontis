@@ -1,15 +1,14 @@
 import { Hono } from "hono";
 import { logger } from "hono/logger";
-import { extractApiKey, validateApiKey, authErrorResponse } from "./auth";
+import { extractApiKey, authErrorResponse } from "./auth";
 import {
-  getUpstream,
   matchesApiPath,
-  resolveModel,
+  resolveModelAndUpstream,
+  requestHasImages,
   routeConfig,
-  selectUpstream,
   upstreamFormat,
-  VISION_MODEL,
 } from "./config";
+import { debugLog } from "./logger";
 import { handleModelsRequest } from "./handlers/models";
 import { handleResponsesRequest } from "./handlers/responses";
 import {
@@ -18,11 +17,11 @@ import {
   generateRequestId,
   jsonResponse,
   openaiAuthHeaders,
-  proxyErrorResponse,
+  passthroughResponse,
   SSE_HEADERS,
   upstreamErrorResponse,
+  wrapProxyRequest,
 } from "./http";
-import { debugLog, warnLog } from "./logger";
 import { formatAnthropicToOpenAI } from "./translate/request/anthropic-to-openai";
 import { formatOpenAIToAnthropic } from "./translate/request/openai-to-anthropic";
 import { formatOpenAIToAnthropic as toAnthropicResponse } from "./translate/response/openai-to-anthropic";
@@ -49,54 +48,26 @@ import type {
   OpenAIResponse,
 } from "./types";
 
-function hasImages(body: AnthropicRequest): boolean {
-  return (body.messages || []).some(
-    (msg) =>
-      Array.isArray(msg.content) &&
-      msg.content.some((part) => part.type === "image"),
-  );
-}
-
-function resolveOpenCodeModel(
-  request: Request,
-  routeUpstream: string,
-  model: string,
-  options: { vision?: AnthropicRequest } = {},
-): { resolvedModel: string; upstream: string; authErr: ReturnType<typeof validateApiKey> } {
-  const key = extractApiKey(request.headers);
-  let resolvedModel = model;
-  const baseUpstream = getUpstream(request, routeUpstream);
-
-  if (baseUpstream.includes("opencode.ai")) {
-    resolvedModel = resolveModel(resolvedModel);
-    if (options.vision && hasImages(options.vision)) {
-      resolvedModel = VISION_MODEL;
-    }
-  }
-
-  const upstream = selectUpstream(request, routeUpstream, resolvedModel);
-  const authErr = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
-  return { resolvedModel, upstream, authErr };
-}
-
 async function handleRequest(request: Request): Promise<Response> {
   const reqId = generateRequestId();
   const route = routeConfig(request);
-  const fmt = upstreamFormat(request);
+  const fmt = upstreamFormat();
   const reqUrlPath = new URL(request.url).pathname;
   const key = extractApiKey(request.headers);
 
   if (route.path === "/v1/messages" && request.method === "POST") {
-    try {
+    return wrapProxyRequest(reqId, async () => {
       const req = (await request.json()) as AnthropicRequest;
       const originalModel = req.model;
       if (route.modelOverride) req.model = route.modelOverride;
 
-      const { resolvedModel, upstream, authErr } = resolveOpenCodeModel(
+      debugLog(`[${reqId}] Received Anthropic messages count: ${req.messages?.length}`);
+
+      const { model: resolvedModel, upstream, authErr } = resolveModelAndUpstream(
         request,
         route.upstream,
         req.model,
-        { vision: req },
+        { hasVision: requestHasImages(req.messages) },
       );
       if (authErr) return authErrorResponse(authErr);
       req.model = resolvedModel;
@@ -104,14 +75,19 @@ async function handleRequest(request: Request): Promise<Response> {
 
       if (fmt === "openai") {
         const openaiReq = formatAnthropicToOpenAI(req);
+        debugLog(`[${reqId}] Translated OpenAI messages: ${JSON.stringify(openaiReq.messages.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content.slice(0, 100) + "..." : m.content })))}`);
+
         const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
           method: "POST",
           headers: { ...openaiAuthHeaders(key), "X-Request-Id": reqId },
           body: JSON.stringify(openaiReq),
         });
+        debugLog(`[${reqId}] Upstream fetch headers received (status=${res.status})`);
+
         if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
 
         if (openaiReq.stream) {
+          debugLog(`[${reqId}] Returning stream Response`);
           return new Response(
             streamOpenAIToAnthropic(
               (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
@@ -120,8 +96,9 @@ async function handleRequest(request: Request): Promise<Response> {
             { headers: SSE_HEADERS },
           );
         }
+        const jsonVal = await res.json();
         return jsonResponse(
-          toAnthropicResponse((await res.json()) as OpenAIResponse, originalModel),
+          toAnthropicResponse(jsonVal as OpenAIResponse, originalModel),
         );
       }
 
@@ -157,27 +134,17 @@ async function handleRequest(request: Request): Promise<Response> {
         body: JSON.stringify(req),
       });
       if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
-      return new Response(await res.text(), {
-        status: res.status,
-        headers: { "Content-Type": res.headers.get("Content-Type") || "application/json" },
-      });
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        warnLog(`[${reqId}] Upstream request timed out`);
-        return proxyErrorResponse("upstream_timeout", "Upstream did not respond in time", { requestId: reqId });
-      }
-      warnLog(`[${reqId}] Request failed: ${err instanceof Error ? err.message : String(err)}`);
-      return proxyErrorResponse("proxy_error", err instanceof Error ? err.message : String(err), { requestId: reqId });
-    }
+      return passthroughResponse(res);
+    });
   }
 
   if (
     matchesApiPath(route.path, reqUrlPath, "/chat/completions") &&
     request.method === "POST"
   ) {
-    try {
+    return wrapProxyRequest(reqId, async () => {
       const req = (await request.json()) as OpenAIRequest;
-      const { resolvedModel, upstream, authErr } = resolveOpenCodeModel(
+      const { model: resolvedModel, upstream, authErr } = resolveModelAndUpstream(
         request,
         route.upstream,
         req.model || "gpt-5.4-mini",
@@ -222,24 +189,14 @@ async function handleRequest(request: Request): Promise<Response> {
         body: JSON.stringify(req),
       });
       if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
-      return new Response(await res.text(), {
-        status: res.status,
-        headers: { "Content-Type": res.headers.get("Content-Type") || "application/json" },
-      });
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        warnLog(`[${reqId}] Upstream request timed out`);
-        return proxyErrorResponse("upstream_timeout", "Upstream did not respond in time", { requestId: reqId });
-      }
-      warnLog(`[${reqId}] Request failed: ${err instanceof Error ? err.message : String(err)}`);
-      return proxyErrorResponse("proxy_error", err instanceof Error ? err.message : String(err), { requestId: reqId });
-    }
+      return passthroughResponse(res);
+    });
   }
 
   if (route.path === "/v1/completions" && request.method === "POST") {
-    try {
+    return wrapProxyRequest(reqId, async () => {
       const req = (await request.json()) as OpenAICompletionRequest;
-      const { resolvedModel, upstream, authErr } = resolveOpenCodeModel(
+      const { model: resolvedModel, upstream, authErr } = resolveModelAndUpstream(
         request,
         route.upstream,
         req.model || "gpt-5.4-mini",
@@ -306,18 +263,8 @@ async function handleRequest(request: Request): Promise<Response> {
         body: JSON.stringify(req),
       });
       if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
-      return new Response(await res.text(), {
-        status: res.status,
-        headers: { "Content-Type": res.headers.get("Content-Type") || "application/json" },
-      });
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        warnLog(`[${reqId}] Upstream request timed out`);
-        return proxyErrorResponse("upstream_timeout", "Upstream did not respond in time", { requestId: reqId });
-      }
-      warnLog(`[${reqId}] Request failed: ${err instanceof Error ? err.message : String(err)}`);
-      return proxyErrorResponse("proxy_error", err instanceof Error ? err.message : String(err), { requestId: reqId });
-    }
+      return passthroughResponse(res);
+    });
   }
 
   if (

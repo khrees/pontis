@@ -1,5 +1,7 @@
 declare const process: { env?: Record<string, string | undefined> };
 
+import { extractApiKey, validateApiKey } from "./auth";
+
 export const GO_UPSTREAM = "https://opencode.ai/zen/go/v1";
 export const ZEN_UPSTREAM = "https://opencode.ai/zen/v1";
 export const DEFAULT_UPSTREAM = GO_UPSTREAM;
@@ -111,16 +113,14 @@ export function routeConfig(request: Request): RouteConfig {
   return { path: remaining, upstream: DEFAULT_UPSTREAM, modelOverride: model };
 }
 
-export function getUpstream(request: Request, routeUpstream: string): string {
+export function getUpstream(routeUpstream: string): string {
   return (
     process?.env?.PONTIS_UPSTREAM_URL ||
     routeUpstream
   );
 }
 
-export function upstreamFormat(
-  request: Request,
-): "openai" | "anthropic" | "openai-completions" {
+export function upstreamFormat(): "openai" | "anthropic" | "openai-completions" {
   const fmt = (
     process?.env?.PONTIS_UPSTREAM_FORMAT ||
     "openai"
@@ -173,4 +173,46 @@ export function isCodexClient(request: Request, url: URL): boolean {
     (request.headers.get("user-agent") || "").toLowerCase().includes("openai") ||
     process?.env?.PONTIS_CODEX_MODE === "true"
   );
+}
+
+// ──────────────────────────────────────────────
+//  Model resolution helpers (used by index.ts)
+// ──────────────────────────────────────────────
+
+export interface ResolvedModel {
+  model: string;
+  upstream: string;
+  authErr: ReturnType<typeof import("./auth").validateApiKey>;
+}
+
+/** Check if an Anthropic request body contains image content blocks. */
+export function requestHasImages(messages: { content?: unknown }[] | undefined): boolean {
+  return (messages || []).some(
+    (msg) =>
+      Array.isArray(msg.content) &&
+      msg.content.some((part: any) => part?.type === "image"),
+  );
+}
+
+/** Resolve model + upstream + auth for a request, applying vision fallback for OpenCode. */
+export function resolveModelAndUpstream(
+  request: Request,
+  routeUpstream: string,
+  model: string,
+  options?: { hasVision?: boolean },
+): ResolvedModel {
+  const key = extractApiKey(request.headers);
+  let resolvedModel = model;
+  const baseUpstream = getUpstream(routeUpstream);
+
+  if (baseUpstream.includes("opencode.ai")) {
+    resolvedModel = resolveModel(resolvedModel);
+    if (options?.hasVision) {
+      resolvedModel = VISION_MODEL;
+    }
+  }
+
+  const upstream = selectUpstream(request, routeUpstream, resolvedModel);
+  const authErr = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
+  return { model: resolvedModel, upstream, authErr };
 }

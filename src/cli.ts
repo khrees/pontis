@@ -884,9 +884,8 @@ async function runInteractiveWizard(env: PontisEnv) {
   section("Infrastructure");
   badge("muted", `Model: ${t.primary(model)}`);
 
-  let proxyPid: number | null = null;
   try {
-    proxyPid = await startProxy(model, clientCmd === "codex");
+    await startProxy(model, clientCmd === "codex");
 
     // Step 5: Connectivity
     const ok = await testConnectivity(apiKey, model);
@@ -981,9 +980,8 @@ async function runWithConfig(
   if (upstreamUrl) kv("Upstream", t.muted(upstreamUrl));
   console.log();
 
-  let proxyPid: number | null = null;
   try {
-    proxyPid = await startProxy(model, clientCmd === "codex");
+    await startProxy(model, clientCmd === "codex");
     const ok = await testConnectivity(apiKey, model);
     if (!ok) process.exit(1);
     await launchClient(clientCmd, model, apiKey, extraArgs);
