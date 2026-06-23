@@ -255,7 +255,7 @@ else
   CACHE_MODELS=""
   CACHE_FILE="$HOME/.pontis_models_cache.json"
   if [ -f "$CACHE_FILE" ]; then
-    node -e '
+    if node -e '
       const fs = require("fs");
       try {
         const cache = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
@@ -267,8 +267,7 @@ else
         }
       } catch (e) {}
       process.exit(1);
-    ' "$CACHE_FILE" > /tmp/pontis_cache_models.txt 2>/dev/null
-    if [ $? -eq 0 ]; then
+    ' "$CACHE_FILE" > /tmp/pontis_cache_models.txt 2>/dev/null; then
       CACHE_MODELS=$(cat /tmp/pontis_cache_models.txt)
     fi
     rm -f /tmp/pontis_cache_models.txt

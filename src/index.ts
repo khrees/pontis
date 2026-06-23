@@ -780,15 +780,25 @@ async function handleRequest(request: Request): Promise<Response> {
       });
     }
 
+    const u = chatRes.usage || {};
+    const promptTokens = u.prompt_tokens || u.input_tokens || 0;
+    const completionTokens = u.completion_tokens || u.output_tokens || 0;
+    const totalTokens = u.total_tokens || (promptTokens + completionTokens);
+    const cachedRead = u.cache_read_input_tokens || u.prompt_tokens_details?.cached_tokens || u.input_tokens_details?.cached_tokens || 0;
+
     const responsePayload = {
       id: chatRes.id || "resp_" + Date.now(),
       object: "response",
       model: originalModel,
       status: "completed",
-      usage: chatRes.usage || {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
+      usage: {
+        input_tokens: promptTokens,
+        output_tokens: completionTokens,
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: totalTokens,
+        cache_read_input_tokens: cachedRead,
+        cache_creation_input_tokens: 0
       },
       output,
     };

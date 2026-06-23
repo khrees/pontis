@@ -23,7 +23,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
   };
 
   const responseId = "resp_" + Date.now();
-  const itemId = "out_" + Date.now();
+  let itemId = "out_" + Date.now();
 
   let pendingText = "";
   let inDsml = false;
@@ -87,6 +87,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
               delta: textBefore
             });
           }
+          closeTextItem(controller);
 
           // 2. Remove the start tag and everything before it
           pendingText = pendingText.slice(startIndex + startMatch[0].length);
@@ -270,6 +271,8 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
       });
       textItemStarted = false;
       textContentStarted = false;
+      fullText = "";
+      itemId = "out_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
     }
   }
 
@@ -440,6 +443,12 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
           // Finalize any active tool calls
           finalizeToolCalls(controller);
 
+          const u = accumulatedUsage || {};
+          const promptTokens = u.prompt_tokens || u.input_tokens || 0;
+          const completionTokens = u.completion_tokens || u.output_tokens || 0;
+          const totalTokens = u.total_tokens || (promptTokens + completionTokens);
+          const cachedRead = u.cache_read_input_tokens || u.prompt_tokens_details?.cached_tokens || u.input_tokens_details?.cached_tokens || 0;
+
           // event: response.completed
           enqueueSSE(controller, "response.completed", {
             type: "response.completed",
@@ -449,10 +458,14 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
               status: "completed",
               model: originalModel,
               output: completedOutputs,
-              usage: accumulatedUsage || {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0
+              usage: {
+                input_tokens: promptTokens,
+                output_tokens: completionTokens,
+                prompt_tokens: promptTokens,
+                completion_tokens: completionTokens,
+                total_tokens: totalTokens,
+                cache_read_input_tokens: cachedRead,
+                cache_creation_input_tokens: 0
               }
             }
           });
@@ -513,6 +526,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
                   // Stream tool calls if present
                   const toolCalls = delta.tool_calls;
                   if (Array.isArray(toolCalls)) {
+                    closeTextItem(controller);
                     for (const tc of toolCalls) {
                       const idx = tc.index;
                       if (idx === undefined) continue;
