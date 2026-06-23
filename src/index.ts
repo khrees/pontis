@@ -8,6 +8,7 @@ import { formatAnthropicToOpenAI as toOpenAIResponse } from "./translate/respons
 import { streamOpenAIToAnthropic } from "./translate/stream/openai-to-anthropic";
 import { streamAnthropicToOpenAI } from "./translate/stream/anthropic-to-openai";
 import { streamChatToResponses } from "./translate/stream/chat-to-responses";
+import { buildCodexModelEntry } from "./model-metadata";
 
 declare const process: any;
 
@@ -605,6 +606,9 @@ async function handleRequest(request: Request): Promise<Response> {
     console.log(
       `[proxy] Incoming: ${request.method} ${request.url} | route.path: ${route.path} | fmt: ${fmt} | upstream: ${dynamicUpstream} | model: ${resolvedModel}`,
     );
+    if (req.previous_response_id) {
+      console.log('[proxy] Responses API: previous_response_id received:', req.previous_response_id);
+    }
 
     // Convert input/instructions to standard OpenAI chat completion messages
     const messages: any[] = [];
@@ -685,6 +689,9 @@ async function handleRequest(request: Request): Promise<Response> {
       messages,
       stream: shouldStream,
     };
+    if (shouldStream) {
+      chatReq.stream_options = { include_usage: true };
+    }
     // Convert Responses API tools → Chat Completions tools
     // Responses API format:  { type: "function", name, description, parameters }
     // Chat Completions format: { type: "function", function: { name, description, parameters } }
@@ -790,6 +797,7 @@ async function handleRequest(request: Request): Promise<Response> {
       id: chatRes.id || "resp_" + Date.now(),
       object: "response",
       model: originalModel,
+      ...(req.previous_response_id ? { previous_response_id: req.previous_response_id } : {}),
       status: "completed",
       usage: {
         input_tokens: promptTokens,
@@ -844,40 +852,7 @@ async function handleRequest(request: Request): Promise<Response> {
       const rawModels = (data.data || []).filter((m: any) =>
         m.id === "big-pickle" || (m.id.endsWith("-free") && m.id !== "minimax-m3-free")
       );
-      const models = rawModels.map((m: any) => ({
-        slug: m.id,
-        display_name: m.id,
-        description: `${m.id} model via Pontis`,
-        supported_in_api: true,
-        visibility: "list",
-        default_reasoning_level: "medium",
-        supported_reasoning_levels: [
-          {
-            effort: "low",
-            description: "Fast responses with lighter reasoning",
-          },
-          {
-            effort: "medium",
-            description: "Balances speed and reasoning depth",
-          },
-          { effort: "high", description: "Greater reasoning depth" },
-        ],
-        shell_type: "shell_command",
-        priority: 1,
-        base_instructions: "",
-        supports_reasoning_summaries: false,
-        support_verbosity: false,
-        apply_patch_tool_type: "freeform",
-        web_search_tool_type: "text",
-        truncation_policy: {
-          mode: "tokens",
-          limit: 128000,
-        },
-        supports_parallel_tool_calls: true,
-        experimental_supported_tools: [],
-        context_window: 128000,
-        max_context_window: 128000,
-      }));
+      const models = rawModels.map((m: any) => buildCodexModelEntry(m.id));
 
       if (route.path.startsWith("/v1/models/")) {
         const parts = route.path.split("/");
@@ -888,40 +863,7 @@ async function handleRequest(request: Request): Promise<Response> {
             headers: { "Content-Type": "application/json" },
           });
         }
-        const fallbackModel = {
-          slug: modelId,
-          display_name: modelId,
-          description: `${modelId} model via Pontis`,
-          supported_in_api: true,
-          visibility: "list",
-          default_reasoning_level: "medium",
-          supported_reasoning_levels: [
-            {
-              effort: "low",
-              description: "Fast responses with lighter reasoning",
-            },
-            {
-              effort: "medium",
-              description: "Balances speed and reasoning depth",
-            },
-            { effort: "high", description: "Greater reasoning depth" },
-          ],
-          shell_type: "shell_command",
-          priority: 1,
-          base_instructions: "",
-          supports_reasoning_summaries: false,
-          support_verbosity: false,
-          apply_patch_tool_type: "freeform",
-          web_search_tool_type: "text",
-          truncation_policy: {
-            mode: "tokens",
-            limit: 128000,
-          },
-          supports_parallel_tool_calls: true,
-          experimental_supported_tools: [],
-          context_window: 128000,
-          max_context_window: 128000,
-        };
+        const fallbackModel = buildCodexModelEntry(modelId);
         return new Response(JSON.stringify(fallbackModel), {
           headers: { "Content-Type": "application/json" },
         });

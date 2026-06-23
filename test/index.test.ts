@@ -708,4 +708,165 @@ describe('worker routing', () => {
 
     vi.restoreAllMocks();
   });
+
+  it('returns model-specific metadata for different Codex models', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        data: [
+          { id: 'mimo-v2.5-free', object: 'model', created: 1234, owned_by: 'opencode' },
+          { id: 'north-mini-code-free', object: 'model', created: 1234, owned_by: 'opencode' },
+        ]
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+
+    const request = new Request('https://proxy.example/v1/models?client_version=0.139.0', {
+      headers: {
+        'x-api-key': key,
+        'user-agent': 'codex_exec/0.139.0'
+      },
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    const json = await response.json() as any;
+    expect(json.models).toBeDefined();
+    expect(json.models.length).toBe(2);
+
+    const mimo = json.models.find((m: any) => m.slug === 'mimo-v2.5-free');
+    const north = json.models.find((m: any) => m.slug === 'north-mini-code-free');
+    expect(mimo).toBeDefined();
+    expect(north).toBeDefined();
+
+    // mimo has a larger context window than north
+    expect(mimo.context_window).toBe(131072);
+    expect(north.context_window).toBe(65536);
+
+    // mimo supports reasoning, north does not
+    expect(mimo.default_reasoning_level).toBe('medium');
+    expect(north.default_reasoning_level).toBe('none');
+    expect(mimo.supports_reasoning_summaries).toBe(true);
+    expect(north.supports_reasoning_summaries).toBe(false);
+
+    // north has smaller max_output_tokens
+    expect(mimo.max_output_tokens).toBe(16384);
+    expect(north.max_output_tokens).toBe(8192);
+
+    // truncation policy should match context_window
+    expect(mimo.truncation_policy.limit).toBe(131072);
+    expect(north.truncation_policy.limit).toBe(65536);
+  });
+
+  it('includes stream_options with include_usage when streaming Responses API request', async () => {
+    let capturedBody: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        // Return a minimal SSE stream that terminates immediately
+        const body = new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          }
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/responses', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'authorization': `Bearer ${key}`,
+        'accept': 'text/event-stream',
+      },
+      body: JSON.stringify({
+        model: 'big-pickle',
+        stream: true,
+        input: [
+          { role: 'user', content: [{ type: 'input_text', text: 'hi' }] }
+        ]
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    expect(capturedBody.stream).toBe(true);
+    expect(capturedBody.stream_options).toEqual({ include_usage: true });
+
+    vi.restoreAllMocks();
+  });
+
+  it('passes through previous_response_id in non-streaming Responses API response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        return new Response(JSON.stringify({
+          choices: [{ message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }]
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/responses', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'authorization': `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: 'big-pickle',
+        previous_response_id: 'resp_prev_12345',
+        input: [
+          { role: 'user', content: [{ type: 'input_text', text: 'hi' }] }
+        ]
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    const json = await response.json() as any;
+    expect(json.object).toBe('response');
+    expect(json.previous_response_id).toBe('resp_prev_12345');
+
+    vi.restoreAllMocks();
+  });
+
+  it('omits previous_response_id from response when not provided in request', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        return new Response(JSON.stringify({
+          choices: [{ message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }]
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/responses', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'authorization': `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: 'big-pickle',
+        input: [
+          { role: 'user', content: [{ type: 'input_text', text: 'hi' }] }
+        ]
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    const json = await response.json() as any;
+    expect(json.previous_response_id).toBeUndefined();
+
+    vi.restoreAllMocks();
+  });
 });

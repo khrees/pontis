@@ -36,6 +36,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
       enqueueSSE(controller, "response.output_item.added", {
         type: "response.output_item.added",
         response_id: responseId,
+        output_index: 0,
         item: {
           id: itemId,
           type: "message",
@@ -256,10 +257,12 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
       enqueueSSE(controller, "response.output_item.done", {
         type: "response.output_item.done",
         response_id: responseId,
+        output_index: 0,
         item: {
           id: itemId,
           type: "message",
-          role: "assistant"
+          role: "assistant",
+          content: [{ type: "text", text: fullText }]
         }
       });
       // Track the completed text output for the response.completed event

@@ -69,12 +69,20 @@ You can direct Pontis to launch a specific client interface directly:
 
 ## Codex CLI (Experimental) ⚠️
 
-Pontis includes experimental support for OpenAI's [Codex CLI](https://github.com/openai/codex-cli). It works in some configurations but has **known issues**:
+Pontis includes experimental support for OpenAI's [Codex CLI](https://github.com/openai/codex-cli). It works in some configurations but has **known limitations**:
 
-- **Streaming responses may not finalize** — the `response.completed` SSE event is missing output and usage data, which can cause Codex CLI to hang after receiving a response.
-- **Model discovery is fragile** — Codex CLI may not detect models correctly depending on what version of the OpenAI SDK it's using internally.
-- **No conversation continuity** — the `previous_response_id` field is not yet handled, so every request starts a fresh conversation.
+- **Conversation continuity is partial** — the `previous_response_id` field is logged and passed through in responses, but Pontis does not yet maintain server-side conversation state. Every request is still forwarded as an independent chat completion to the upstream model.
 - **The `-m` flag** used by the `pontis codex` launcher may not be supported by all versions of the Codex CLI binary.
+
+### Model Metadata
+
+Pontis returns enriched, per-model metadata via the `/v1/models` endpoint so that the Codex CLI correctly configures context windows, output token limits, and reasoning capabilities for each model. This prevents the CLI from using fallback defaults that can cause agent loops (aggressive context truncation leading to repeated exploration).
+
+Known model metadata is provided for: `mimo-v2.5-free`, `deepseek-v4-flash-free`, `big-pickle`, `nemotron-3-ultra-free`, `north-mini-code-free`, and `qwen3.6-plus`. Unknown models receive sensible defaults (128K context, 16K max output tokens).
+
+### Streaming
+
+Streaming responses include full `response.completed` events with output items and usage data. When streaming, Pontis requests usage information from the upstream provider via `stream_options: { include_usage: true }`.
 
 If you run into issues, try using `pontis standalone` and pointing Codex CLI at the proxy manually:
 
@@ -89,6 +97,7 @@ codex --model mimo-v2.5-free
 ```
 
 Contributions to improve Codex CLI support are welcome!
+
 
 ---
 
