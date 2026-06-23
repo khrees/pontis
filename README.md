@@ -116,6 +116,8 @@ You can fully automate Pontis and bypass interactive prompt configuration by set
 | `LOCAL_API_KEY` | Key for local setups (if authentication is required) | `export LOCAL_API_KEY="sk-local-test"` |
 | `PONTIS_DEBUG` | Enable verbose proxy request logging | `export PONTIS_DEBUG=true` |
 | `PONTIS_CODEX_MODE` | Return Codex-format model metadata from `/v1/models` | `export PONTIS_CODEX_MODE=true` |
+| `PONTIS_TIMEOUT_MS` | Upstream request timeout in milliseconds (default 120000) | `export PONTIS_TIMEOUT_MS=30000` |
+| `PONTIS_MIN_KEY_LENGTH` | Minimum API key length check (default 32, set 0 to disable) | `export PONTIS_MIN_KEY_LENGTH=0` |
 
 ---
 
@@ -159,6 +161,72 @@ export OPENAI_BASE_URL="https://pontis-proxy.your-subdomain.workers.dev/v1"
 export OPENAI_API_KEY="your-opencode-api-key"
 codex
 ```
+
+---
+
+## Troubleshooting
+
+### Proxy fails to start (`port already in use`)
+
+A previous instance may still be running. Kill it manually:
+
+```bash
+lsof -ti :8787 | xargs kill -9
+```
+
+Or restart your terminal / wait 30 seconds for the process to clean up.
+
+### "API key is too short" error
+
+Local providers (Ollama, LM Studio) often use short or dummy keys. Set the minimum length to 0:
+
+```bash
+export PONTIS_MIN_KEY_LENGTH=0
+```
+
+Pontis's CLI sets this automatically when you select a local provider, but manual setups need it.
+
+### "Upstream did not respond in time" error
+
+The upstream model provider took too long to respond. Pontis defaults to a 120-second timeout. If your model is slow to load (e.g., first-time cold start), increase the timeout:
+
+```bash
+export PONTIS_TIMEOUT_MS=300000
+```
+
+### Debug logging
+
+To see detailed request translation, set:
+
+```bash
+export PONTIS_DEBUG=true
+```
+
+You'll see logs prefixed with request IDs like `[req_xxx]` showing how requests are translated and where they're routed. Each request also gets a `X-Request-Id` header in the response for correlation.
+
+### Model not found or wrong metadata
+
+Pontis fetches the model list from the upstream provider and enriches it with known metadata (context window, tool support). If a model is missing, try:
+
+1. Check it's available on the upstream directly: `curl <upstream>/v1/models`
+2. Set a default model explicitly: `export PONTIS_MODEL="your-model-id"`
+3. For Codex CLI, the model metadata table is in `src/model-metadata.ts` — add an entry if needed
+
+### Proxy shows `502` for all requests
+
+This usually means the upstream provider is unreachable or returning errors:
+
+```bash
+# Test the proxy's upstream directly
+curl https://opencode.ai/zen/v1/models -H "Authorization: Bearer $OPENCODE_API_KEY"
+
+# Or for local setups
+curl http://localhost:11434/v1/models
+```
+
+### Request tracing
+
+Every response from the proxy includes an `X-Request-Id` header (e.g., `req_abc123_4f`). Include this ID in any bug reports or when asking for help — it helps correlate proxy logs with upstream behavior.
 
 ---
 

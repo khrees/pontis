@@ -2,6 +2,7 @@
  * Converts Anthropic Messages streaming SSE to OpenAI Chat Completions streaming SSE.
  */
 import { OpenAIMessage } from '../../types';
+import { warnLog } from '../../logger';
 
 interface AnthropicSSEEvent {
   type: string;
@@ -66,7 +67,10 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream<Uint8Arr
           if (!raw) continue;
 
           let evt: AnthropicSSEEvent;
-          try { evt = JSON.parse(raw); } catch { continue; }
+          try { evt = JSON.parse(raw); } catch (e) {
+            warnLog(`[Stream→OpenAI] Failed to parse SSE event: ${e}`);
+            continue;
+          }
 
           switch (evt.type) {
             case "message_start":

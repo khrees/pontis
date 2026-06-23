@@ -1,4 +1,5 @@
 import type { OpenAIUsage, ResponsesApiUsage, ResponsesOutputItem } from "../../types";
+import { warnLog } from "../../logger";
 
 /**
  * Callback fired when the stream completes, with the final state for caching.
@@ -664,7 +665,7 @@ export function streamChatToResponses(
                 }
               }
             } catch (e) {
-              // Ignore invalid JSON lines
+              warnLog(`[Chat→Responses stream] Failed to parse SSE chunk: ${e}`);
             }
           }
         }

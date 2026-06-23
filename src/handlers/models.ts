@@ -6,11 +6,23 @@ import {
   upstreamFormat,
   type RouteConfig,
 } from "../config";
+import { fetchWithTimeout } from "../http";
 import { anthropicHeaders, jsonResponse, upstreamErrorResponse } from "../http";
 import {
   buildCodexModelEntry,
   KNOWN_MODEL_METADATA,
 } from "../model-metadata";
+
+/**
+ * Returns true for models that should be filtered OUT.
+ * We only filter clearly non-relevant system models (like "model-created-by"),
+ * not unknown — those get sensible defaults.
+ */
+function isFilteredOut(id: string): boolean {
+  // Remove known junk/placeholder models that some providers inject
+  if (id.includes("placeholder") || id === "model-created-by" || id.startsWith(".")) return true;
+  return false;
+}
 
 export async function handleModelsRequest(
   request: Request,
@@ -24,11 +36,11 @@ export async function handleModelsRequest(
 
   const res =
     fmt === "anthropic"
-      ? await fetch(`${upstream}/v1/models`, {
+      ? await fetchWithTimeout(`${upstream}/v1/models`, {
           method: "GET",
           headers: anthropicHeaders(request, key!),
         })
-      : await fetch(`${upstream}/models`, {
+      : await fetchWithTimeout(`${upstream}/models`, {
           method: "GET",
           headers: {
             ...(key ? { Authorization: `Bearer ${key}` } : {}),
@@ -38,37 +50,46 @@ export async function handleModelsRequest(
   if (!res.ok) return upstreamErrorResponse(res, await res.text());
 
   const url = new URL(request.url);
+
+  // For non-Codex clients, pass through the raw model list as-is
   if (!isCodexClient(request, url)) {
     return new Response(await res.text(), {
       headers: { "Content-Type": "application/json" },
     });
   }
 
+  // For Codex CLI: build structured model metadata entries
   const data = (await res.json()) as { data?: { id: string }[] };
-  const rawModels = (data.data || []).filter(
-    (m) =>
-      m.id === "big-pickle" ||
-      (m.id.endsWith("-free") && m.id !== "minimax-m3-free"),
-  );
+  const upstreamModels = (data.data || []).map((m) => m.id).filter((id) => !isFilteredOut(id));
 
+  // Merge upstream models with known metadata overrides
+  const seen = new Set<string>();
+  const modelEntries = [];
+
+  for (const id of upstreamModels) {
+    seen.add(id);
+    modelEntries.push(buildCodexModelEntry(id));
+  }
+
+  // Ensure any locally-known models not present upstream are still advertised
   for (const id of Object.keys(KNOWN_MODEL_METADATA)) {
-    if (!rawModels.some((m) => m.id === id)) {
-      rawModels.push({ id });
+    if (!seen.has(id)) {
+      seen.add(id);
+      modelEntries.push(buildCodexModelEntry(id));
     }
   }
 
+  // Ensure the default model is always present
   const defaultModel = getDefaultFreeModel();
-  if (defaultModel && !rawModels.some((m) => m.id === defaultModel)) {
-    rawModels.push({ id: defaultModel });
+  if (defaultModel && !seen.has(defaultModel)) {
+    modelEntries.push(buildCodexModelEntry(defaultModel));
   }
-
-  const models = rawModels.map((m) => buildCodexModelEntry(m.id));
 
   if (route.path.startsWith("/v1/models/")) {
     const modelId = route.path.split("/").pop()!;
-    const matched = models.find((m) => m.slug === modelId);
+    const matched = modelEntries.find((m) => m.slug === modelId);
     return jsonResponse(matched ?? buildCodexModelEntry(modelId));
   }
 
-  return jsonResponse({ models });
+  return jsonResponse({ models: modelEntries });
 }

@@ -18,6 +18,19 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+
+function getVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));
+    return pkg.version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+const VERSION = getVersion();
+
 const t = {
   primary: chalk.hex("#A78BFA"), // lilac — brand, headings
   secondary: chalk.hex("#22D3EE"), // cyan — secondary info
@@ -51,7 +64,6 @@ const PORT = 8787;
 const PROXY_URL = `http://localhost:${PORT}`;
 const KEY_FILE = join(homedir(), ".opencode_api_key");
 const CACHE_FILE = join(homedir(), ".pontis_models_cache.json");
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST_PROXY = join(ROOT, "dist", "proxy.js");
 const SRC_DIR = join(ROOT, "src");
 const PROXY_LOG = "/tmp/pontis_proxy.log";
@@ -71,7 +83,7 @@ const FALLBACK_MODELS = [
 function splash() {
   const divider = chalk.dim(SYM.separator.repeat(42));
   console.log(
-    `\n  ${t.primary(SYM.diamond)}  ${t.bold("Pontis")}  ${t.muted("v1.0.0")}`,
+    `\n  ${t.primary(SYM.diamond)}  ${t.bold("Pontis")}  ${t.muted(`v${VERSION}`)}`,
   );
   console.log(`  ${t.muted("Bridge AI models ↔ CLI harnesses")}`);
   console.log(`  ${chalk.dim(divider)}\n`);
@@ -492,6 +504,20 @@ async function selectClientInteractive(): Promise<string> {
 }
 
 // ══════════════════════════════════════════════════════════════
+//  GRACEFUL SHUTDOWN
+// ══════════════════════════════════════════════════════════════
+
+/** Tracked proxy PID so SIGINT/SIGTERM can clean it up. */
+let activeProxy: { pid: number } | null = null;
+
+/** Register a one-shot shutdown handler. */
+function onShutdown(handler: () => void) {
+  const done = () => { handler(); process.exit(0); };
+  process.on("SIGINT", done);
+  process.on("SIGTERM", done);
+}
+
+// ══════════════════════════════════════════════════════════════
 //  PROXY MANAGEMENT
 // ══════════════════════════════════════════════════════════════
 
@@ -547,6 +573,10 @@ async function startProxy(model: string, codexMode: boolean): Promise<number> {
   } catch {}
 
   if (codexMode) process.env.PONTIS_CODEX_MODE = "true";
+  // Skip key-length check for local providers (Ollama/LM Studio keys are often short)
+  if (!codexMode && process.env.PONTIS_PROVIDER === "local") {
+    process.env.PONTIS_MIN_KEY_LENGTH = "0";
+  }
 
   // Build if needed
   if (needsProxyRebuild()) buildProxy();
@@ -601,6 +631,12 @@ async function startProxy(model: string, codexMode: boolean): Promise<number> {
     }
     await new Promise((r) => setTimeout(r, 100));
   }
+
+  // Track for graceful shutdown
+  activeProxy = { pid: child.pid! };
+  onShutdown(() => {
+    try { process.kill(activeProxy!.pid, "SIGTERM"); } catch {}
+  });
 
   spin.stop({
     type: "success",
@@ -810,11 +846,13 @@ async function runInteractiveWizard(env: PontisEnv) {
     // Step 6: Launch
     await launchClient(clientCmd, model, apiKey, []);
   } finally {
-    if (proxyPid) {
-      try {
-        process.kill(proxyPid, "SIGTERM");
-      } catch {}
+    if (activeProxy) {
+      try { process.kill(activeProxy.pid, "SIGTERM"); } catch {}
+      activeProxy = null;
     }
+    // Remove our shutdown handlers so they don't fire during normal exit
+    process.removeAllListeners("SIGINT");
+    process.removeAllListeners("SIGTERM");
   }
 }
 
@@ -843,6 +881,7 @@ async function runWithConfig(
 
   if (upstreamUrl) process.env.PONTIS_UPSTREAM_URL = upstreamUrl;
   if (upstreamFormat) process.env.PONTIS_UPSTREAM_FORMAT = upstreamFormat;
+  process.env.PONTIS_PROVIDER = provider;
 
   // When API key or model isn't from opts/env, fall back to interactive for the missing bits
   const hasModel = !!modelFromOptsEnv;
@@ -896,11 +935,12 @@ async function runWithConfig(
     if (!ok) process.exit(1);
     await launchClient(clientCmd, model, apiKey, extraArgs);
   } finally {
-    if (proxyPid) {
-      try {
-        process.kill(proxyPid, "SIGTERM");
-      } catch {}
+    if (activeProxy) {
+      try { process.kill(activeProxy.pid, "SIGTERM"); } catch {}
+      activeProxy = null;
     }
+    process.removeAllListeners("SIGINT");
+    process.removeAllListeners("SIGTERM");
   }
 }
 
@@ -912,7 +952,7 @@ const program = new Command();
 
 program
   .name("pontis")
-  .version("1.0.0")
+  .version(VERSION)
   .description("Bridge between OpenCode/Local models and AI CLI harnesses");
 
 function addPontisOptions(cmd: Command) {

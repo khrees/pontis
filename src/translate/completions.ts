@@ -7,6 +7,7 @@ import {
   AnthropicResponse
 } from '../types';
 import { extractCachedTokens, extractOutputTokens, extractUncachedInputTokens, extractInputTokens } from '../cache';
+import { warnLog } from '../logger';
 
 // ==========================================
 // OpenAI Legacy Completion <-> OpenAI Chat
@@ -77,7 +78,10 @@ export function streamOpenAIChatToOpenAICompletion(chatStream: ReadableStream<Ui
             continue;
           }
           let parsed: any;
-          try { parsed = JSON.parse(raw); } catch { continue; }
+          try { parsed = JSON.parse(raw); } catch (e) {
+            warnLog(`[Completions→Chat stream] Failed to parse SSE event: ${e}`);
+            continue;
+          }
           const delta = parsed.choices?.[0]?.delta;
           const text = delta?.content || delta?.reasoning_content || "";
           const finishReason = parsed.choices?.[0]?.finish_reason;
@@ -232,7 +236,10 @@ export function streamAnthropicToOpenAICompletion(anthropicStream: ReadableStrea
           const raw = line.slice(6).trim();
           if (!raw) continue;
           let evt: any;
-          try { evt = JSON.parse(raw); } catch { continue; }
+          try { evt = JSON.parse(raw); } catch (e) {
+            warnLog(`[Chat→Completion stream] Failed to parse SSE event: ${e}`);
+            continue;
+          }
           switch (evt.type) {
             case "content_block_delta": {
               const delta = evt.delta;
@@ -355,7 +362,9 @@ export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<U
                     const parsed = JSON.parse(data);
                     const text = parsed.choices?.[0]?.text;
                     if (text !== undefined) processStreamDelta(text, parsed);
-                  } catch {}
+                  } catch (e) {
+                warnLog(`[Completion stream] Failed to parse SSE chunk: ${e}`);
+              }
                 }
               }
             }
@@ -373,7 +382,9 @@ export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<U
                 const parsed = JSON.parse(data);
                 const text = parsed.choices?.[0]?.text;
                 if (text !== undefined) processStreamDelta(text, parsed);
-              } catch {}
+              } catch (e) {
+                warnLog(`[Completion stream] Failed to parse SSE chunk: ${e}`);
+              }
             }
           }
         }

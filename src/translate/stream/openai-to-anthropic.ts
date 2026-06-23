@@ -1,4 +1,5 @@
 import { extractCachedTokens, extractOutputTokens, extractUncachedInputTokens } from '../../cache';
+import { warnLog } from '../../logger';
 import { OpenAIUsage } from '../../types';
 
 interface StreamDelta {
@@ -233,7 +234,9 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream<Uint8Array>
                     const parsed = JSON.parse(data) as ParsedChunk;
                     const delta = parsed.choices?.[0]?.delta;
                     if (delta) processStreamDelta(delta, parsed);
-                  } catch { /* parse error */ }
+                  } catch (e) {
+                    warnLog(`[stream] Failed to parse SSE data in final buffer: ${e}`);
+                  }
                 }
               }
             }
@@ -254,7 +257,10 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream<Uint8Array>
                 const parsed = JSON.parse(data) as ParsedChunk;
                 const delta = parsed.choices?.[0]?.delta;
                 if (delta) processStreamDelta(delta, parsed);
-              } catch { continue; }
+              } catch (e) {
+                warnLog(`[stream] Failed to parse SSE chunk: ${e}`);
+                continue;
+              }
             }
           }
         }

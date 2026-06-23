@@ -38,7 +38,7 @@ describe('worker routing', () => {
 
     await worker.fetch(request);
 
-    expect(fetchMock).toHaveBeenCalledWith('https://api.anthropic.com/v1/models', {
+    expect(fetchMock).toHaveBeenCalledWith('https://api.anthropic.com/v1/models', expect.objectContaining({
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -46,7 +46,7 @@ describe('worker routing', () => {
         'Anthropic-Version': '2023-06-01',
         'Anthropic-Beta': 'tools-2024-04-04',
       },
-    });
+    }));
   });
 
   it('forwards Anthropic beta header when translating OpenAI requests to Anthropic', async () => {
@@ -162,10 +162,10 @@ describe('worker routing', () => {
 
     await worker.fetch(request);
 
-    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/go/v1/models', {
+    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/go/v1/models', expect.objectContaining({
       method: 'GET',
       headers: { Authorization: `Bearer ${key}` },
-    });
+    }));
   });
 
   it('routes /zen-prefixed model discovery to OpenCode Zen models', async () => {
@@ -179,10 +179,10 @@ describe('worker routing', () => {
 
     await worker.fetch(request);
 
-    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/v1/models', {
+    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/v1/models', expect.objectContaining({
       method: 'GET',
       headers: { Authorization: `Bearer ${key}` },
-    });
+    }));
   });
 
   it('translates models list format for Codex clients', async () => {
