@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260504.1",
+    "@types/node": "^25.9.3",
     "esbuild": "^0.25.0",
     "pkg": "^5.8.1",
     "typescript": "^6.0.3",
@@ -22,6 +23,8 @@
   "description": "A bidirectional translation proxy bridging Anthropic and OpenAI API formats to run Claude Code, Codex CLI, and other terminal-based AI harnesses using local models or OpenCode.",
   "dependencies": {
     "@hono/node-server": "^2.0.5",
+    "chalk": "^5.6.2",
+    "commander": "^15.0.0",
     "hono": "^4.12.17"
   }
 }
