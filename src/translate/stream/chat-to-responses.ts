@@ -1,4 +1,4 @@
-export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, originalModel: string): ReadableStream<Uint8Array> {
+export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, originalModel: string, previousResponseId?: string): ReadableStream<Uint8Array> {
   const reader = chatStream.getReader();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -324,7 +324,8 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
           id: responseId,
           object: "response",
           status: "in_progress",
-          model: originalModel
+          model: originalModel,
+          ...(previousResponseId ? { previous_response_id: previousResponseId } : {})
         }
       });
     },
@@ -460,6 +461,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
               object: "response",
               status: "completed",
               model: originalModel,
+              ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
               output: completedOutputs,
               usage: {
                 input_tokens: promptTokens,

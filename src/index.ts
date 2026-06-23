@@ -734,6 +734,7 @@ async function handleRequest(request: Request): Promise<Response> {
         streamChatToResponses(
           (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
           originalModel,
+          req.previous_response_id,
         ),
         {
           headers: {

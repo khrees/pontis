@@ -869,4 +869,56 @@ describe('worker routing', () => {
 
     vi.restoreAllMocks();
   });
+
+  it('passes through previous_response_id in streaming Responses API response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        const body = new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          }
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/responses', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'authorization': `Bearer ${key}`,
+        'accept': 'text/event-stream',
+      },
+      body: JSON.stringify({
+        model: 'big-pickle',
+        stream: true,
+        previous_response_id: 'resp_prev_99999',
+        input: [
+          { role: 'user', content: [{ type: 'input_text', text: 'hi' }] }
+        ]
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    while (true) {
+      const { done, value } = await reader!.read();
+      if (done) break;
+      text += decoder.decode(value);
+    }
+    expect(text).toContain('event: response.created');
+    expect(text).toContain('"previous_response_id":"resp_prev_99999"');
+    expect(text).toContain('event: response.completed');
+
+    vi.restoreAllMocks();
+  });
 });
