@@ -13,6 +13,7 @@ interface StreamDelta {
     };
   }[];
   reasoning_content?: string;
+  reasoning?: string;
   content?: string;
 }
 
@@ -129,7 +130,8 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream<Uint8Array>
               });
             }
           }
-        } else if (delta.reasoning_content) {
+        } else if (delta.reasoning_content || delta.reasoning) {
+          const reasoning = delta.reasoning_content || delta.reasoning;
           if (isToolUse || hasStartedTextBlock) {
             enqueueSSE(controller, "content_block_stop", {
               type: "content_block_stop",
@@ -172,7 +174,7 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream<Uint8Array>
           enqueueSSE(controller, "content_block_delta", {
             type: "content_block_delta",
             index: contentBlockIndex,
-            delta: { type: "thinking_delta", thinking: delta.reasoning_content },
+            delta: { type: "thinking_delta", thinking: reasoning },
           });
         } else if (delta.content) {
           if (isToolUse || hasStartedThinkingBlock) {
@@ -246,6 +248,9 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream<Uint8Array>
           }
 
           const chunk = decoder.decode(value, { stream: true });
+          if (process.env.PONTIS_DEBUG === "true") {
+            console.log(`[Stream Chunk Received from Upstream]:`, chunk);
+          }
           buffer += chunk;
           if (buffer.length > MAX_BUFFER_SIZE) {
             warnLog('[stream] Buffer exceeded maximum size, aborting');

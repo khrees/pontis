@@ -1323,8 +1323,8 @@ describe("Responses API integration", () => {
     const { default: worker } = await import("../src/index");
     let capturedBody: any = null;
 
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async (url, init?: RequestInit) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_url, init?: RequestInit) => {
         if (init?.body) {
           capturedBody = JSON.parse(init.body as string);
         }
@@ -1393,5 +1393,67 @@ describe("Responses API integration", () => {
     expect(assistantMsg.content).toBe("Final answer text");
 
     vi.restoreAllMocks();
+  });
+
+  it("merges consecutive assistant and user messages in history, preserving reasoning content", async () => {
+    const { responsesToChatMessages } = await import("../src/translate/request/responses-to-chat");
+
+    const req: any = {
+      input: [
+        {
+          role: "assistant",
+          type: "message",
+          content: [{ type: "text", text: "Assistant thoughts first" }],
+          reasoning_content: "My thinking process"
+        },
+        {
+          role: "assistant",
+          type: "function_call",
+          name: "read_file",
+          arguments: '{"path": "package.json"}',
+          call_id: "call_123"
+        },
+        {
+          role: "tool",
+          type: "function_call_output",
+          call_id: "call_123",
+          output: "file contents here"
+        },
+        {
+          role: "user",
+          content: "First user message text"
+        },
+        {
+          role: "user",
+          content: "Second user message text"
+        }
+      ]
+    };
+
+    const { messages } = responsesToChatMessages(req, "mimo-v2.5-free");
+
+    // We expect:
+    // 1. Merged Assistant message with content, reasoning, and tool_calls
+    // 2. Tool response message
+    // 3. Merged User message
+    expect(messages.length).toBe(3);
+
+    const mergedAssistant = messages[0];
+    expect(mergedAssistant.role).toBe("assistant");
+    expect(mergedAssistant.content).toBe("Assistant thoughts first");
+    expect(mergedAssistant.reasoning_content).toBe("My thinking process");
+    expect((mergedAssistant as any).reasoning).toBe("My thinking process");
+    expect(mergedAssistant.tool_calls).toBeDefined();
+    expect(mergedAssistant.tool_calls!.length).toBe(1);
+    expect(mergedAssistant.tool_calls![0].function.name).toBe("read_file");
+
+    const toolMsg = messages[1];
+    expect(toolMsg.role).toBe("tool");
+    expect(toolMsg.content).toBe("file contents here");
+    expect(toolMsg.tool_call_id).toBe("call_123");
+
+    const mergedUser = messages[2];
+    expect(mergedUser.role).toBe("user");
+    expect(mergedUser.content).toBe("First user message text\nSecond user message text");
   });
 });

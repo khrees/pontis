@@ -58,7 +58,7 @@ export function streamChatToResponses(
   let accumulatedUsage: OpenAIUsage | null = null;
   const completedOutputs: ResponsesOutputItem[] = [];
 
-  function ensureTextItem(controller: ReadableStreamDefaultController<Uint8Array>) {
+  function ensureMessageItem(controller: ReadableStreamDefaultController<Uint8Array>) {
     if (!textItemStarted) {
       enqueueSSE(controller, "response.output_item.added", {
         type: "response.output_item.added",
@@ -74,6 +74,10 @@ export function streamChatToResponses(
       textItemStarted = true;
       textItemWasOutput = true;
     }
+  }
+
+  function ensureTextItem(controller: ReadableStreamDefaultController<Uint8Array>) {
+    ensureMessageItem(controller);
     if (!textContentStarted) {
       enqueueSSE(controller, "response.content_part.added", {
         type: "response.content_part.added",
@@ -570,16 +574,18 @@ export function streamChatToResponses(
                 const delta = choices[0].delta;
                 if (delta) {
                   // Stream reasoning content if present
-                  if (delta.reasoning_content) {
+                  const reasoning = delta.reasoning_content || delta.reasoning;
+                  if (reasoning) {
                     hasStreamedReasoning = true;
-                    reasoningText += delta.reasoning_content;
+                    reasoningText += reasoning;
+                    ensureMessageItem(controller);
                     enqueueSSE(controller, "response.reasoning_text.delta", {
                       type: "response.reasoning_text.delta",
                       response_id: resolvedId,
                       item_id: itemId,
                       output_index: 0,
                       content_index: 0,
-                      delta: delta.reasoning_content
+                      delta: reasoning
                     });
                   }
 

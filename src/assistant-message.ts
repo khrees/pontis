@@ -12,8 +12,10 @@ export function assistantMessageFromOutputItems(
     if (item.type === "message") {
       const text = item.content.find((c) => c.type === "text")?.text || "";
       if (text) textParts.push(text);
-      if (item.reasoning_content) {
-        assistantMsg.reasoning_content = item.reasoning_content;
+      const reasoning = item.reasoning_content || (item as any).reasoning;
+      if (reasoning) {
+        assistantMsg.reasoning_content = reasoning;
+        (assistantMsg as any).reasoning = reasoning;
       }
     } else if (item.type === "function_call") {
       toolCalls.push({
@@ -33,7 +35,11 @@ export function assistantMessageFromOutputItems(
 export function assistantMessageFromChatMessage(message: OpenAIMessage): OpenAIMessage {
   const assistantMsg: OpenAIMessage = { role: "assistant", content: null };
   if (typeof message.content === "string") assistantMsg.content = message.content;
-  if (message.reasoning_content) assistantMsg.reasoning_content = message.reasoning_content;
+  const reasoning = message.reasoning_content || (message as any).reasoning;
+  if (reasoning) {
+    assistantMsg.reasoning_content = reasoning;
+    (assistantMsg as any).reasoning = reasoning;
+  }
   if (message.tool_calls && message.tool_calls.length > 0) {
     assistantMsg.tool_calls = message.tool_calls;
   }

@@ -20,9 +20,9 @@ export function formatOpenAIToAnthropic(completion: OpenAIResponse, model: strin
 
   const content: AnthropicContentBlock[] = [];
   const message = completion.choices?.[0]?.message;
-
-  if (message?.reasoning_content) {
-    content.push({ type: "thinking", thinking: message.reasoning_content, signature: "" });
+  const reasoning = message?.reasoning_content || (message as any)?.reasoning;
+  if (reasoning) {
+    content.push({ type: "thinking", thinking: reasoning, signature: "" });
   }
 
   if (message?.content) {

@@ -266,6 +266,8 @@ export interface ResponseInputItem {
   name?: string;
   summary?: unknown;
   encrypted_content?: string;
+  reasoning_content?: string;
+  reasoning?: string;
 }
 
 export interface ResponsesApiTool {
@@ -303,6 +305,7 @@ export interface ResponsesMessageOutputItem {
   role: "assistant";
   content: ResponsesTextOutput[];
   reasoning_content?: string;
+  reasoning?: string;
 }
 
 export interface ResponsesFunctionCallOutputItem {

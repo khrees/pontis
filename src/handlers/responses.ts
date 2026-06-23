@@ -4,7 +4,7 @@ import {
   assistantMessageFromOutputItems,
 } from "../assistant-message";
 import { getUpstream, resolveModel, selectUpstream } from "../config";
-import { fetchWithTimeout, jsonResponse, openaiAuthHeaders, proxyErrorResponse, SSE_HEADERS, upstreamErrorResponse } from "../http";
+import { fetchWithTimeout, jsonResponse, openaiAuthHeaders, SSE_HEADERS, upstreamErrorResponse, wrapProxyRequest } from "../http";
 import { debugLog, warnLog } from "../logger";
 import { responseCache } from "../responses-cache";
 import type { OpenAIMessage, OpenAIResponse, ResponsesApiRequest, ResponsesApiUsage } from "../types";
@@ -66,13 +66,13 @@ export async function handleResponsesRequest(
   routeUpstream: string,
   reqId: string,
 ): Promise<Response> {
-  try {
+  return wrapProxyRequest(reqId, async () => {
     const key = extractApiKey(request.headers);
     const req = (await request.json()) as ResponsesApiRequest;
     const originalModel = req.model || "gpt-5.4-mini";
 
     let resolvedModel = originalModel;
-    const baseUpstream = getUpstream(request, routeUpstream);
+    const baseUpstream = getUpstream(routeUpstream);
     if (baseUpstream.includes("opencode.ai")) {
       resolvedModel = resolveModel(resolvedModel);
     }
@@ -183,12 +183,5 @@ export async function handleResponsesRequest(
       usage,
       output,
     });
-  } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
-      warnLog(`[${reqId}] Upstream request timed out`);
-      return proxyErrorResponse("upstream_timeout", "Upstream did not respond in time", { requestId: reqId });
-    }
-    warnLog(`[${reqId}] Responses request failed: ${err instanceof Error ? err.message : String(err)}`);
-    return proxyErrorResponse("proxy_error", err instanceof Error ? err.message : String(err), { requestId: reqId });
-  }
+  });
 }

@@ -65,9 +65,9 @@ export function formatAnthropicToOpenAI(body: AnthropicRequest): OpenAIRequest {
 
           (msg.content as AnthropicContentBlock[]).forEach((part) => {
             if (part.type === "text") {
-              text += (typeof part.text === "string" ? part.text : JSON.stringify(part.text)) + "\n";
+              text += (typeof part.text === "string" ? part.text : JSON.stringify(part.text));
             } else if (part.type === "thinking") {
-              reasoningContent += (typeof part.thinking === "string" ? part.thinking : JSON.stringify(part.thinking)) + "\n";
+              reasoningContent += (typeof part.thinking === "string" ? part.thinking : JSON.stringify(part.thinking));
             } else if (part.type === "tool_use") {
               toolCalls.push({
                 id: part.id,
@@ -77,12 +77,13 @@ export function formatAnthropicToOpenAI(body: AnthropicRequest): OpenAIRequest {
             }
           });
 
-          const trimmed = text.trim();
-          const trimmedReasoning = reasoningContent.trim();
-          if (trimmed) assistantMsg.content = trimmed;
-          if (trimmedReasoning) assistantMsg.reasoning_content = trimmedReasoning;
+           if (text !== "") assistantMsg.content = text;
+          if (reasoningContent !== "") {
+            assistantMsg.reasoning_content = reasoningContent;
+            (assistantMsg as any).reasoning = reasoningContent;
+          }
           if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
-          if (assistantMsg.content || assistantMsg.reasoning_content || assistantMsg.tool_calls) {
+          if (assistantMsg.content !== null || assistantMsg.reasoning_content || (assistantMsg as any).reasoning || assistantMsg.tool_calls) {
             result.push(assistantMsg);
           }
         }
@@ -94,7 +95,7 @@ export function formatAnthropicToOpenAI(body: AnthropicRequest): OpenAIRequest {
 
           (msg.content as AnthropicContentBlock[]).forEach((part) => {
             if (part.type === "text") {
-              userText += (typeof part.text === "string" ? part.text : JSON.stringify(part.text)) + "\n";
+              userText += (typeof part.text === "string" ? part.text : JSON.stringify(part.text));
             } else if (part.type === "image") {
               const translated = translateImageBlock(part);
               if (translated) contentParts.push(translated);
@@ -107,15 +108,13 @@ export function formatAnthropicToOpenAI(body: AnthropicRequest): OpenAIRequest {
             }
           });
 
-          const trimmed = userText.trim();
-
           result.push(...toolResults);
 
           if (contentParts.length > 0) {
-            if (trimmed) contentParts.unshift({ type: "text", text: trimmed });
+            if (userText !== "") contentParts.unshift({ type: "text", text: userText });
             result.push({ role: "user", content: contentParts });
-          } else if (trimmed) {
-            result.push({ role: "user", content: trimmed });
+          } else if (userText !== "") {
+            result.push({ role: "user", content: userText });
           }
         }
 
