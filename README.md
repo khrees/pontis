@@ -13,8 +13,7 @@ It bridges the gap between Anthropic format (`/v1/messages`), OpenAI chat comple
 - **✨ Active Model Discovery**: Dynamically scans OpenCode's endpoints or your local model server's `/models` list.
 - **👁️ Auto-Vision Format Translation**: Translates Anthropic base64 and URL image blocks into standard OpenAI `image_url` payloads, enabling image inputs if your chosen upstream engine supports vision processing.
 - **🔑 Auto-Approved API Keys**: Writes key configurations into your `~/.claude.json` to bypass OAuth redirects automatically.
-- **⚙️ OpenAI Completions / Codex Compatibility**: Directly translates legacy text-completions prompt shapes to chat formats so you can power your Codex CLI using OpenCode or local chat model engines.
-  - ⚠️ **Codex CLI support is experimental** — see [known issues](#codex-cli-experimental) below.
+- **⚙️ OpenAI Completions / Codex Compatibility**: Translates the OpenAI Responses API (used by Codex CLI) to chat completions, including tool calls, tool outputs, and streaming events.
 
 ---
 
@@ -62,41 +61,43 @@ This clones Pontis to `~/.pontis`, configures local dependencies, and sets up th
 You can direct Pontis to launch a specific client interface directly:
 
 * **Claude Code**: `pontis claude`
-* **Codex CLI** ⚠️: `pontis codex` — see [experimental notes](#codex-cli-experimental)
+* **Codex CLI**: `pontis codex`
 * **Standalone Server**: `pontis standalone` (keeps only the proxy server running on `http://localhost:8787` for external API connections)
 
 ---
 
-## Codex CLI (Experimental) ⚠️
+## Codex CLI
 
-Pontis includes experimental support for OpenAI's [Codex CLI](https://github.com/openai/codex-cli). It works in some configurations but has **known limitations**:
+Pontis supports [OpenAI's Codex CLI](https://github.com/openai/codex) out of the box. Run:
 
-- **Conversation continuity is partial** — the `previous_response_id` field is logged and passed through in responses, but Pontis does not yet maintain server-side conversation state. Every request is still forwarded as an independent chat completion to the upstream model.
-- **The `-m` flag** used by the `pontis codex` launcher may not be supported by all versions of the Codex CLI binary.
+```bash
+pontis codex
+```
 
-### Model Metadata
+Pontis starts the local proxy, selects your model, and launches Codex pointed at `http://localhost:8787/v1`.
 
-Pontis returns enriched, per-model metadata via the `/v1/models` endpoint so that the Codex CLI correctly configures context windows, output token limits, and reasoning capabilities for each model. This prevents the CLI from using fallback defaults that can cause agent loops (aggressive context truncation leading to repeated exploration).
+### What Pontis handles
+
+- **Responses API translation** — Converts Codex's `/v1/responses` requests (including `function_call`, `function_call_output`, and message items) into chat completions for OpenCode or local engines.
+- **Model metadata** — Returns per-model context windows, output limits, and tool capabilities via `/v1/models` so Codex configures itself correctly instead of using fallback defaults.
+- **Streaming** — Emits full `response.completed` events with output items and usage data (`stream_options: { include_usage: true }`).
+- **Multi-turn context** — Reconstructs conversation history from Codex's input items and caches state for `previous_response_id` follow-ups.
 
 Known model metadata is provided for: `mimo-v2.5-free`, `deepseek-v4-flash-free`, `big-pickle`, `nemotron-3-ultra-free`, `north-mini-code-free`, and `qwen3.6-plus`. Unknown models receive sensible defaults (128K context, 16K max output tokens).
 
-### Streaming
+### Manual setup
 
-Streaming responses include full `response.completed` events with output items and usage data. When streaming, Pontis requests usage information from the upstream provider via `stream_options: { include_usage: true }`.
-
-If you run into issues, try using `pontis standalone` and pointing Codex CLI at the proxy manually:
+To run the proxy and Codex separately:
 
 ```bash
-# Start the proxy
+# Terminal 1 — start the proxy
 pontis standalone
 
-# In another terminal, launch Codex CLI pointing at the proxy
+# Terminal 2 — launch Codex
 export OPENAI_BASE_URL="http://localhost:8787/v1"
 export OPENAI_API_KEY="your-opencode-api-key"
 codex --model mimo-v2.5-free
 ```
-
-Contributions to improve Codex CLI support are welcome!
 
 
 ---

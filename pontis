@@ -415,6 +415,23 @@ if [ "$CLIENT_CMD" = "codex" ]; then
   export PONTIS_CODEX_MODE=true
 fi
 
+# Rebuild bundled proxy when any source file is newer than dist/proxy.js
+NEEDS_PROXY_REBUILD=false
+if [ ! -f "$PROXY_DIR/dist/proxy.js" ]; then
+  NEEDS_PROXY_REBUILD=true
+elif find "$PROXY_DIR/src" -name '*.ts' -newer "$PROXY_DIR/dist/proxy.js" 2>/dev/null | grep -q .; then
+  NEEDS_PROXY_REBUILD=true
+fi
+if [ "$NEEDS_PROXY_REBUILD" = true ]; then
+  info "Rebuilding proxy bundle from source..."
+  if [ ! -d "$PROXY_DIR/node_modules" ]; then
+    (cd "$PROXY_DIR" && npm install --silent 2>/dev/null)
+  fi
+  (cd "$PROXY_DIR" && npm run build:proxy 2>/dev/null) || \
+    (cd "$PROXY_DIR" && npx esbuild src/local-server.ts --bundle --platform=node --target=node18 --outfile=dist/proxy.js 2>/dev/null) || \
+    warn "Could not rebuild dist/proxy.js — falling back to tsx source mode"
+fi
+
 # Start the proxy (run native precompiled binary if present, fallback to bundled JS, fallback to tsx source mode)
 NATIVE_BINARY=""
 if [ -f "$PROXY_DIR/bin/pontis-proxy" ]; then

@@ -8,7 +8,9 @@ import { formatAnthropicToOpenAI as toOpenAIResponse } from "./translate/respons
 import { streamOpenAIToAnthropic } from "./translate/stream/openai-to-anthropic";
 import { streamAnthropicToOpenAI } from "./translate/stream/anthropic-to-openai";
 import { streamChatToResponses } from "./translate/stream/chat-to-responses";
-import { buildCodexModelEntry } from "./model-metadata";
+import { responsesToChatMessages, buildChatRequest, chatResponseToOutput, extractUsage } from "./translate/request/responses-to-chat";
+import { buildCodexModelEntry, KNOWN_MODEL_METADATA } from "./model-metadata";
+import { responseCache } from "./responses-cache";
 
 declare const process: any;
 
@@ -610,112 +612,47 @@ async function handleRequest(request: Request): Promise<Response> {
       console.log('[proxy] Responses API: previous_response_id received:', req.previous_response_id);
     }
 
-    // Convert input/instructions to standard OpenAI chat completion messages
-    const messages: any[] = [];
-    if (req.instructions) {
-      messages.push({ role: "system", content: req.instructions });
+    // Convert Responses API request to Chat Completions format
+    const cachedPrevious = req.previous_response_id
+      ? responseCache.get(req.previous_response_id)
+      : undefined;
+
+    if (cachedPrevious) {
+      console.log(`[proxy] Responses API: reconstructed ${cachedPrevious.fullMessages.length} cached messages for previous_response_id=${req.previous_response_id}`);
+    } else if (req.previous_response_id) {
+      console.log(`[proxy] Responses API: WARNING — unknown previous_response_id=${req.previous_response_id}, conversation context lost`);
     }
-    if (Array.isArray(req.input)) {
-      for (const inputItem of req.input) {
-        let role = inputItem.role || "user";
-        if (role === "developer") role = "system";
 
-        const contentParts = Array.isArray(inputItem.content) ? inputItem.content : [];
-        const textParts: string[] = [];
-        const toolResults: { tool_use_id: string; content: string }[] = [];
-        const toolUses: { id: string; name: string; arguments: string }[] = [];
-
-        if (typeof inputItem.content === "string") {
-          textParts.push(inputItem.content);
-        } else if (contentParts.length > 0) {
-          for (const part of contentParts) {
-            if (part.type === "input_text" || part.type === "text") {
-              textParts.push(part.text || "");
-            } else if (part.type === "tool_use") {
-              toolUses.push({
-                id: part.id || "",
-                name: part.name || "",
-                arguments: typeof part.input === "string" ? part.input : JSON.stringify(part.input || {}),
-              });
-            } else if (part.type === "tool_result") {
-              const resultContent = typeof part.content === "string"
-                ? part.content
-                : Array.isArray(part.content)
-                  ? part.content.map((c: any) => c.text || "").join("\n")
-                  : JSON.stringify(part.content || "");
-              toolResults.push({ tool_use_id: part.tool_use_id || "", content: resultContent });
-            }
-          }
-        }
-
-        if (role === "assistant") {
-          const msg: any = {};
-          msg.role = "assistant";
-          msg.content = textParts.length > 0 ? textParts.join("\n").trim() || null : null;
-          if (toolUses.length > 0) {
-            msg.tool_calls = toolUses.map((tu) => ({
-              id: tu.id,
-              type: "function",
-              function: { name: tu.name, arguments: tu.arguments },
-            }));
-          }
-          if (msg.content !== null || (msg.tool_calls && msg.tool_calls.length > 0)) {
-            messages.push(msg);
-          }
-        } else if (role === "user") {
-          // Flush text as a user message
-          const text = textParts.join("\n").trim();
-          if (text) {
-            messages.push({ role: "user", content: text });
-          }
-          // Flush tool_results as tool role messages
-          for (const tr of toolResults) {
-            messages.push({ role: "tool", content: tr.content, tool_call_id: tr.tool_use_id });
-          }
-        } else {
-          // tool, system, or other role — preserve as-is with text content
-          const text = textParts.join("\n").trim();
-          messages.push({ role, content: text || "" });
-        }
-      }
-    }
+    const { messages, dsmlFallbackActive } = responsesToChatMessages(
+      req,
+      resolvedModel,
+      cachedPrevious?.fullMessages as any[],
+    );
 
     const acceptHeader = request.headers.get("Accept") || "";
     const isEventStream = acceptHeader.includes("text/event-stream");
     const shouldStream = req.stream !== undefined ? req.stream : isEventStream;
 
-    const chatReq: any = {
-      model: req.model,
-      messages,
-      stream: shouldStream,
-    };
-    if (shouldStream) {
-      chatReq.stream_options = { include_usage: true };
+    const chatReq = buildChatRequest(req, req.model, messages);
+    chatReq.stream = shouldStream;
+    if (shouldStream) chatReq.stream_options = { include_usage: true };
+    // Re-apply streaming after buildChatRequest since it reads req.stream
+    // but we want the Accept header logic too
+    if (!shouldStream) delete chatReq.stream_options;
+
+    if (dsmlFallbackActive) {
+      console.log(`[proxy] Responses API: injected DSML fallback prompt for ${resolvedModel}`);
     }
-    // Convert Responses API tools → Chat Completions tools
-    // Responses API format:  { type: "function", name, description, parameters }
-    // Chat Completions format: { type: "function", function: { name, description, parameters } }
-    if (Array.isArray(req.tools)) {
-      const converted = req.tools
-        .filter((t: any) => t && t.type === "function")
-        .map((t: any) => ({
-          type: "function",
-          function: {
-            name: t.name || t.function?.name || "",
-            description: t.description || t.function?.description,
-            parameters: t.parameters || t.function?.parameters,
-          },
-        }));
-      if (converted.length > 0) {
-        chatReq.tools = converted;
-      }
-    }
+
+    const inputItemCount = Array.isArray(req.input) ? req.input.length : 0;
     console.log(
-      `[proxy] Responses → Chat: ${chatReq.messages?.length || 0} messages, ${chatReq.tools?.length || 0} tools, stream=${chatReq.stream}`,
+      `[proxy] Responses → Chat: ${inputItemCount} input items → ${chatReq.messages?.length || 0} messages, ${chatReq.tools?.length || 0} tools, stream=${chatReq.stream}`,
       chatReq.tools ? `tools: ${JSON.stringify(chatReq.tools.map((t: any) => ({ name: t.function?.name })))}` : "",
     );
-    if (req.max_tokens !== undefined) chatReq.max_tokens = req.max_tokens;
-    if (req.temperature !== undefined) chatReq.temperature = req.temperature;
+    if (inputItemCount > 0 && (chatReq.messages?.length || 0) < inputItemCount / 2) {
+      const types = req.input.map((item: any) => item.type || item.role || "?");
+      console.log(`[proxy] WARNING — possible input conversion loss. Input types: ${types.join(", ")}`);
+    }
 
     const upstreamUrl = `${dynamicUpstream}/chat/completions`;
     const res = await fetch(upstreamUrl, {
@@ -729,12 +666,53 @@ async function handleRequest(request: Request): Promise<Response> {
 
     if (!res.ok) return upstreamErrorResponse(res, await res.text());
 
+    // Generate response ID so we can cache conversation state for the next turn
+    const responseId = "resp_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8);
+
     if (chatReq.stream) {
+      responseCache.set(responseId, {
+        responseId,
+        model: resolvedModel,
+        originalModel,
+        fullMessages: chatReq.messages,
+        usage: {},
+      });
+
       return new Response(
         streamChatToResponses(
           (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
           originalModel,
           req.previous_response_id,
+          responseId,
+          (completeEvt) => {
+            // Reconstruct assistant message from streamed output items
+            const assistantMsg: any = { role: "assistant" };
+            const textParts: string[] = [];
+            const toolCalls: any[] = [];
+            for (const item of completeEvt.output || []) {
+              if (item.type === "message") {
+                const text = item.content?.find((c: any) => c.type === "text")?.text || "";
+                if (text) textParts.push(text);
+              } else if (item.type === "function_call") {
+                toolCalls.push({
+                  id: item.call_id,
+                  type: "function",
+                  function: { name: item.name, arguments: item.arguments },
+                });
+              }
+            }
+            if (textParts.length > 0) assistantMsg.content = textParts.join("\n");
+            if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
+            const cachedMessages = [...chatReq.messages, assistantMsg];
+
+            responseCache.set(responseId, {
+              responseId,
+              model: resolvedModel,
+              originalModel,
+              fullMessages: cachedMessages,
+              usage: completeEvt.usage,
+            });
+          },
         ),
         {
           headers: {
@@ -748,67 +726,33 @@ async function handleRequest(request: Request): Promise<Response> {
 
     const chatRes = (await res.json()) as any;
     const message = chatRes.choices?.[0]?.message || {};
-    const output: any[] = [];
+    const { output } = chatResponseToOutput(message);
+    const usage = extractUsage(chatRes);
 
-    // Add text message output if there's content
-    const textContent = message.content || "";
-    if (textContent) {
-      output.push({
-        id: "out_" + Date.now(),
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text: textContent }],
-      });
+    // Append assistant response to the cached messages so the next turn
+    // sees the full conversation history (user → assistant → user → ...)
+    const assistantMsg: any = { role: "assistant" };
+    if (typeof message.content === "string") assistantMsg.content = message.content;
+    if (message.tool_calls && message.tool_calls.length > 0) {
+      assistantMsg.tool_calls = message.tool_calls;
     }
+    const cachedMessages = [...chatReq.messages, assistantMsg];
 
-    // Add function_call outputs for any tool calls
-    const toolCalls = message.tool_calls;
-    if (Array.isArray(toolCalls)) {
-      for (const tc of toolCalls) {
-        const callId = tc.id || `call_${Date.now()}`;
-        const argsStr = typeof tc.function?.arguments === "string" ? tc.function.arguments : "{}";
-        output.push({
-          id: `item_${callId}`,
-          type: "function_call",
-          name: tc.function?.name || "",
-          call_id: callId,
-          arguments: argsStr,
-          status: "completed",
-        });
-      }
-    }
-
-    // Fallback: if output is empty, send a minimal text response
-    if (output.length === 0) {
-      output.push({
-        id: "out_" + Date.now(),
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text: "" }],
-      });
-    }
-
-    const u = chatRes.usage || {};
-    const promptTokens = u.prompt_tokens || u.input_tokens || 0;
-    const completionTokens = u.completion_tokens || u.output_tokens || 0;
-    const totalTokens = u.total_tokens || (promptTokens + completionTokens);
-    const cachedRead = u.cache_read_input_tokens || u.prompt_tokens_details?.cached_tokens || u.input_tokens_details?.cached_tokens || 0;
+    responseCache.set(responseId, {
+      responseId,
+      model: resolvedModel,
+      originalModel,
+      fullMessages: cachedMessages,
+      usage,
+    });
 
     const responsePayload = {
-      id: chatRes.id || "resp_" + Date.now(),
+      id: responseId,
       object: "response",
       model: originalModel,
       ...(req.previous_response_id ? { previous_response_id: req.previous_response_id } : {}),
       status: "completed",
-      usage: {
-        input_tokens: promptTokens,
-        output_tokens: completionTokens,
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
-        total_tokens: totalTokens,
-        cache_read_input_tokens: cachedRead,
-        cache_creation_input_tokens: 0
-      },
+      usage,
       output,
     };
 
@@ -853,6 +797,21 @@ async function handleRequest(request: Request): Promise<Response> {
       const rawModels = (data.data || []).filter((m: any) =>
         m.id === "big-pickle" || (m.id.endsWith("-free") && m.id !== "minimax-m3-free")
       );
+      
+      // Ensure all known models are present so Codex CLI can cache metadata
+      // (missing entries cause fallback defaults with aggressive ~10KB truncation).
+      for (const id of Object.keys(KNOWN_MODEL_METADATA)) {
+        if (!rawModels.some((m: any) => m.id === id)) {
+          rawModels.push({ id });
+        }
+      }
+
+      // Ensure the default free model is in rawModels if not already present
+      const defaultModel = getDefaultFreeModel();
+      if (defaultModel && !rawModels.some((m: any) => m.id === defaultModel)) {
+        rawModels.push({ id: defaultModel });
+      }
+
       const models = rawModels.map((m: any) => buildCodexModelEntry(m.id));
 
       if (route.path.startsWith("/v1/models/")) {

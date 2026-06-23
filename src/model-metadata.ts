@@ -15,7 +15,24 @@ export interface ModelMetadata {
   max_output_tokens: number;
   supports_reasoning: boolean;
   supports_parallel_tool_calls: boolean;
+  supports_structured_tool_calls: boolean;
+  experimental_supported_tools: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Default Codex tools every model can use via structured tool calls
+// ---------------------------------------------------------------------------
+
+const CODEX_CORE_TOOLS = [
+  "Bash",
+  "Read",
+  "Edit",
+  "Write",
+  "Glob",
+  "Grep",
+  "WebFetch",
+  "WebSearch",
+];
 
 // ---------------------------------------------------------------------------
 // Known model metadata
@@ -26,6 +43,8 @@ const DEFAULT_METADATA: ModelMetadata = {
   max_output_tokens: 16384,
   supports_reasoning: false,
   supports_parallel_tool_calls: true,
+  supports_structured_tool_calls: true,
+  experimental_supported_tools: CODEX_CORE_TOOLS,
 };
 
 /**
@@ -33,13 +52,14 @@ const DEFAULT_METADATA: ModelMetadata = {
  * `/v1/models` endpoint. Partial – any missing field falls back to
  * `DEFAULT_METADATA`.
  */
-const KNOWN_MODEL_METADATA: Record<string, Partial<ModelMetadata>> = {
+export const KNOWN_MODEL_METADATA: Record<string, Partial<ModelMetadata>> = {
   // Mimo (Xiaomi) – coding-focused model
   "mimo-v2.5-free": {
     context_window: 131072,
     max_output_tokens: 16384,
     supports_reasoning: true,
     supports_parallel_tool_calls: true,
+    supports_structured_tool_calls: true,
   },
   // DeepSeek V4 Flash
   "deepseek-v4-flash-free": {
@@ -47,6 +67,7 @@ const KNOWN_MODEL_METADATA: Record<string, Partial<ModelMetadata>> = {
     max_output_tokens: 16384,
     supports_reasoning: true,
     supports_parallel_tool_calls: true,
+    supports_structured_tool_calls: true,
   },
   // Big Pickle (alias/experimental model)
   "big-pickle": {
@@ -54,6 +75,7 @@ const KNOWN_MODEL_METADATA: Record<string, Partial<ModelMetadata>> = {
     max_output_tokens: 16384,
     supports_reasoning: false,
     supports_parallel_tool_calls: true,
+    supports_structured_tool_calls: true,
   },
   // Nemotron 3 Ultra (NVIDIA)
   "nemotron-3-ultra-free": {
@@ -61,6 +83,7 @@ const KNOWN_MODEL_METADATA: Record<string, Partial<ModelMetadata>> = {
     max_output_tokens: 16384,
     supports_reasoning: false,
     supports_parallel_tool_calls: true,
+    supports_structured_tool_calls: true,
   },
   // North Mini Code
   "north-mini-code-free": {
@@ -68,6 +91,7 @@ const KNOWN_MODEL_METADATA: Record<string, Partial<ModelMetadata>> = {
     max_output_tokens: 8192,
     supports_reasoning: false,
     supports_parallel_tool_calls: true,
+    supports_structured_tool_calls: true,
   },
   // Qwen (vision model)
   "qwen3.6-plus": {
@@ -75,6 +99,7 @@ const KNOWN_MODEL_METADATA: Record<string, Partial<ModelMetadata>> = {
     max_output_tokens: 8192,
     supports_reasoning: false,
     supports_parallel_tool_calls: true,
+    supports_structured_tool_calls: true,
   },
 };
 
@@ -150,7 +175,8 @@ export function buildCodexModelEntry(modelId: string) {
       limit: meta.context_window,
     },
     supports_parallel_tool_calls: meta.supports_parallel_tool_calls,
-    experimental_supported_tools: [],
+    supports_structured_tool_calls: meta.supports_structured_tool_calls,
+    experimental_supported_tools: meta.experimental_supported_tools,
     context_window: meta.context_window,
     max_context_window: meta.context_window,
     max_output_tokens: meta.max_output_tokens,

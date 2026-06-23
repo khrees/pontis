@@ -1,10 +1,30 @@
-export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, originalModel: string, previousResponseId?: string): ReadableStream<Uint8Array> {
+/**
+ * Callback fired when the stream completes, with the final state for caching.
+ * The caller can use this to persist conversation state for multi-turn.
+ */
+export interface StreamCompleteEvent {
+  responseId: string;
+  output: any[];
+  usage: Record<string, number>;
+  model: string;
+}
+
+export function streamChatToResponses(
+  chatStream: ReadableStream<Uint8Array>,
+  originalModel: string,
+  previousResponseId?: string,
+  responseId?: string,
+  onComplete?: (evt: StreamCompleteEvent) => void,
+): ReadableStream<Uint8Array> {
   const reader = chatStream.getReader();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let buffer = "";
   let hasStreamedReasoning = false;
   let fullText = "";
+
+  // Track if the text item was actually emitted (determines output_index for tool calls)
+  let textItemWasOutput = false;
 
   // Track whether the text output_item has been started (lazy)
   let textItemStarted = false;
@@ -22,7 +42,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
     controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
   };
 
-  const responseId = "resp_" + Date.now();
+  const resolvedId = responseId || "resp_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8);
   let itemId = "out_" + Date.now();
 
   let pendingText = "";
@@ -35,7 +55,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
     if (!textItemStarted) {
       enqueueSSE(controller, "response.output_item.added", {
         type: "response.output_item.added",
-        response_id: responseId,
+        response_id: resolvedId,
         output_index: 0,
         item: {
           id: itemId,
@@ -45,11 +65,12 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
         }
       });
       textItemStarted = true;
+      textItemWasOutput = true;
     }
     if (!textContentStarted) {
       enqueueSSE(controller, "response.content_part.added", {
         type: "response.content_part.added",
-        response_id: responseId,
+        response_id: resolvedId,
         item_id: itemId,
         part: {
           type: "text",
@@ -81,7 +102,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
             fullText += textBefore;
             enqueueSSE(controller, "response.output_text.delta", {
               type: "response.output_text.delta",
-              response_id: responseId,
+              response_id: resolvedId,
               item_id: itemId,
               output_index: 0,
               content_index: 0,
@@ -119,7 +140,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
                 fullText += toFlush;
                 enqueueSSE(controller, "response.output_text.delta", {
                   type: "response.output_text.delta",
-                  response_id: responseId,
+                  response_id: resolvedId,
                   item_id: itemId,
                   output_index: 0,
                   content_index: 0,
@@ -133,7 +154,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
               fullText += pendingText;
               enqueueSSE(controller, "response.output_text.delta", {
                 type: "response.output_text.delta",
-                response_id: responseId,
+                response_id: resolvedId,
                 item_id: itemId,
                 output_index: 0,
                 content_index: 0,
@@ -169,7 +190,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
           enqueueSSE(controller, "response.output_item.added", {
             type: "response.output_item.added",
-            response_id: responseId,
+            response_id: resolvedId,
             output_index: toolCallCount,
             item: {
               id: toolItemId,
@@ -182,7 +203,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
           enqueueSSE(controller, "response.function_call_arguments.delta", {
             type: "response.function_call_arguments.delta",
-            response_id: responseId,
+            response_id: resolvedId,
             item_id: toolItemId,
             output_index: toolCallCount,
             call_id: callId,
@@ -191,7 +212,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
           enqueueSSE(controller, "response.function_call_arguments.done", {
             type: "response.function_call_arguments.done",
-            response_id: responseId,
+            response_id: resolvedId,
             item_id: toolItemId,
             output_index: toolCallCount,
             call_id: callId,
@@ -200,7 +221,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
           enqueueSSE(controller, "response.output_item.done", {
             type: "response.output_item.done",
-            response_id: responseId,
+            response_id: resolvedId,
             item: {
               id: toolItemId,
               type: "function_call",
@@ -229,11 +250,15 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
     }
   }
 
+  function getOutputIndexOffset(): number {
+    return textItemWasOutput ? 1 : 0;
+  }
+
   function closeTextItem(controller: ReadableStreamDefaultController<Uint8Array>) {
     if (textContentStarted) {
       enqueueSSE(controller, "response.output_text.done", {
         type: "response.output_text.done",
-        response_id: responseId,
+        response_id: resolvedId,
         item_id: itemId,
         output_index: 0,
         content_index: 0,
@@ -242,7 +267,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
       enqueueSSE(controller, "response.content_part.done", {
         type: "response.content_part.done",
-        response_id: responseId,
+        response_id: resolvedId,
         item_id: itemId,
         output_index: 0,
         content_index: 0,
@@ -256,7 +281,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
     if (textItemStarted) {
       enqueueSSE(controller, "response.output_item.done", {
         type: "response.output_item.done",
-        response_id: responseId,
+        response_id: resolvedId,
         output_index: 0,
         item: {
           id: itemId,
@@ -283,7 +308,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
     for (const [idx, activeTc] of activeToolCalls.entries()) {
       enqueueSSE(controller, "response.function_call_arguments.done", {
         type: "response.function_call_arguments.done",
-        response_id: responseId,
+        response_id: resolvedId,
         item_id: activeTc.itemId,
         output_index: idx + 1,
         call_id: activeTc.id,
@@ -292,7 +317,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
       enqueueSSE(controller, "response.output_item.done", {
         type: "response.output_item.done",
-        response_id: responseId,
+        response_id: resolvedId,
         item: {
           id: activeTc.itemId,
           type: "function_call",
@@ -321,7 +346,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
       enqueueSSE(controller, "response.created", {
         type: "response.created",
         response: {
-          id: responseId,
+          id: resolvedId,
           object: "response",
           status: "in_progress",
           model: originalModel,
@@ -358,7 +383,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
               enqueueSSE(controller, "response.output_item.added", {
                 type: "response.output_item.added",
-                response_id: responseId,
+                response_id: resolvedId,
                 output_index: toolCallCount,
                 item: {
                   id: toolItemId,
@@ -371,7 +396,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
               enqueueSSE(controller, "response.function_call_arguments.delta", {
                 type: "response.function_call_arguments.delta",
-                response_id: responseId,
+                response_id: resolvedId,
                 item_id: toolItemId,
                 output_index: toolCallCount,
                 call_id: callId,
@@ -380,7 +405,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
               enqueueSSE(controller, "response.function_call_arguments.done", {
                 type: "response.function_call_arguments.done",
-                response_id: responseId,
+                response_id: resolvedId,
                 item_id: toolItemId,
                 output_index: toolCallCount,
                 call_id: callId,
@@ -389,7 +414,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
               enqueueSSE(controller, "response.output_item.done", {
                 type: "response.output_item.done",
-                response_id: responseId,
+                response_id: resolvedId,
                 item: {
                   id: toolItemId,
                   type: "function_call",
@@ -421,7 +446,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
             fullText += pendingText;
             enqueueSSE(controller, "response.output_text.delta", {
               type: "response.output_text.delta",
-              response_id: responseId,
+              response_id: resolvedId,
               item_id: itemId,
               output_index: 0,
               content_index: 0,
@@ -433,7 +458,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
           if (hasStreamedReasoning) {
             enqueueSSE(controller, "response.reasoning_text.done", {
               type: "response.reasoning_text.done",
-              response_id: responseId,
+              response_id: resolvedId,
               item_id: itemId,
               output_index: 0,
               content_index: 0
@@ -457,7 +482,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
           enqueueSSE(controller, "response.completed", {
             type: "response.completed",
             response: {
-              id: responseId,
+              id: resolvedId,
               object: "response",
               status: "completed",
               model: originalModel,
@@ -474,6 +499,24 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
               }
             }
           });
+
+          if (onComplete) {
+            const uu = accumulatedUsage || {};
+            onComplete({
+              responseId: resolvedId,
+              output: completedOutputs,
+              usage: {
+                input_tokens: uu.prompt_tokens || uu.input_tokens || 0,
+                output_tokens: uu.completion_tokens || uu.output_tokens || 0,
+                prompt_tokens: uu.prompt_tokens || uu.input_tokens || 0,
+                completion_tokens: uu.completion_tokens || uu.output_tokens || 0,
+                total_tokens: uu.total_tokens || 0,
+                cache_read_input_tokens: uu.cache_read_input_tokens || uu.prompt_tokens_details?.cached_tokens || uu.input_tokens_details?.cached_tokens || 0,
+                cache_creation_input_tokens: 0,
+              },
+              model: originalModel,
+            });
+          }
 
           controller.close();
           break;
@@ -505,7 +548,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
                     hasStreamedReasoning = true;
                     enqueueSSE(controller, "response.reasoning_text.delta", {
                       type: "response.reasoning_text.delta",
-                      response_id: responseId,
+                      response_id: resolvedId,
                       item_id: itemId,
                       output_index: 0,
                       content_index: 0,
@@ -518,7 +561,7 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
                     if (hasStreamedReasoning) {
                       enqueueSSE(controller, "response.reasoning_text.done", {
                         type: "response.reasoning_text.done",
-                        response_id: responseId,
+                        response_id: resolvedId,
                         item_id: itemId,
                         output_index: 0,
                         content_index: 0
@@ -536,6 +579,8 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
                       const idx = tc.index;
                       if (idx === undefined) continue;
 
+                      const outputIdx = idx + getOutputIndexOffset();
+
                       if (!activeToolCalls.has(idx)) {
                         const callId = tc.id || `call_${Date.now()}_${idx}`;
                         const functionName = tc.function?.name || "";
@@ -550,8 +595,8 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
                         enqueueSSE(controller, "response.output_item.added", {
                           type: "response.output_item.added",
-                          response_id: responseId,
-                          output_index: idx + 1,
+                          response_id: resolvedId,
+                          output_index: outputIdx,
                           item: {
                             id: toolItemId,
                             type: "function_call",
@@ -569,15 +614,53 @@ export function streamChatToResponses(chatStream: ReadableStream<Uint8Array>, or
 
                         enqueueSSE(controller, "response.function_call_arguments.delta", {
                           type: "response.function_call_arguments.delta",
-                          response_id: responseId,
+                          response_id: resolvedId,
                           item_id: activeTc.itemId,
-                          output_index: idx + 1,
+                          output_index: outputIdx,
                           call_id: activeTc.id,
                           delta: argDelta
                         });
                       }
                     }
                   }
+                }
+
+                // When finish_reason is tool_calls, finalize all active tool calls
+                const finishReason = choices[0]?.finish_reason;
+                if (finishReason === "tool_calls" && activeToolCalls.size > 0) {
+                  for (const [idx, activeTc] of activeToolCalls.entries()) {
+                    const outputIdx = idx + getOutputIndexOffset();
+                    enqueueSSE(controller, "response.function_call_arguments.done", {
+                      type: "response.function_call_arguments.done",
+                      response_id: resolvedId,
+                      item_id: activeTc.itemId,
+                      output_index: outputIdx,
+                      call_id: activeTc.id,
+                      arguments: activeTc.arguments
+                    });
+
+                    enqueueSSE(controller, "response.output_item.done", {
+                      type: "response.output_item.done",
+                      response_id: resolvedId,
+                      item: {
+                        id: activeTc.itemId,
+                        type: "function_call",
+                        name: activeTc.name,
+                        call_id: activeTc.id,
+                        arguments: activeTc.arguments
+                      }
+                    });
+
+                    completedOutputs.push({
+                      id: activeTc.itemId,
+                      type: "function_call",
+                      name: activeTc.name,
+                      call_id: activeTc.id,
+                      arguments: activeTc.arguments,
+                      status: "completed"
+                    });
+                  }
+                  activeToolCalls.clear();
                 }
               }
             } catch (e) {

@@ -730,12 +730,13 @@ describe('worker routing', () => {
     expect(response.status).toBe(200);
     const json = await response.json() as any;
     expect(json.models).toBeDefined();
-    expect(json.models.length).toBe(2);
+    expect(json.models.length).toBeGreaterThanOrEqual(2);
 
     const mimo = json.models.find((m: any) => m.slug === 'mimo-v2.5-free');
     const north = json.models.find((m: any) => m.slug === 'north-mini-code-free');
     expect(mimo).toBeDefined();
     expect(north).toBeDefined();
+    expect(mimo.supports_structured_tool_calls).toBe(true);
 
     // mimo has a larger context window than north
     expect(mimo.context_window).toBe(131072);
@@ -754,6 +755,46 @@ describe('worker routing', () => {
     // truncation policy should match context_window
     expect(mimo.truncation_policy.limit).toBe(131072);
     expect(north.truncation_policy.limit).toBe(65536);
+  });
+
+  it('includes custom PONTIS_MODEL in Codex models list if not returned by upstream', async () => {
+    // Set PONTIS_MODEL temporarily
+    const originalEnv = process.env.PONTIS_MODEL;
+    process.env.PONTIS_MODEL = 'big-pickle';
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        data: [
+          { id: 'mimo-v2.5-free', object: 'model', created: 1234, owned_by: 'opencode' },
+        ]
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+
+    const request = new Request('https://proxy.example/v1/models?client_version=0.139.0', {
+      headers: {
+        'x-api-key': key,
+        'user-agent': 'codex_exec/0.139.0'
+      },
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    const json = await response.json() as any;
+    expect(json.models).toBeDefined();
+    expect(json.models.length).toBeGreaterThanOrEqual(2);
+
+    const mimo = json.models.find((m: any) => m.slug === 'mimo-v2.5-free');
+    const pickle = json.models.find((m: any) => m.slug === 'big-pickle');
+    expect(mimo).toBeDefined();
+    expect(pickle).toBeDefined();
+
+    // Restores original PONTIS_MODEL
+    if (originalEnv === undefined) {
+      delete process.env.PONTIS_MODEL;
+    } else {
+      process.env.PONTIS_MODEL = originalEnv;
+    }
+    vi.restoreAllMocks();
   });
 
   it('includes stream_options with include_usage when streaming Responses API request', async () => {
@@ -801,9 +842,35 @@ describe('worker routing', () => {
     vi.restoreAllMocks();
   });
 
+  it('includes deepseek-v4-flash-free in Codex models list when missing from upstream', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        data: [
+          { id: 'mimo-v2.5-free', object: 'model', created: 1234, owned_by: 'opencode' },
+        ]
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+
+    const request = new Request('https://proxy.example/v1/models?client_version=0.139.0', {
+      headers: {
+        'x-api-key': key,
+        'user-agent': 'codex_exec/0.139.0'
+      },
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    const json = await response.json() as any;
+    const deepseek = json.models.find((m: any) => m.slug === 'deepseek-v4-flash-free');
+    expect(deepseek).toBeDefined();
+    expect(deepseek.context_window).toBe(131072);
+    expect(deepseek.truncation_policy.limit).toBe(131072);
+    expect(deepseek.supports_parallel_tool_calls).toBe(true);
+  });
+
   it('passes through previous_response_id in non-streaming Responses API response', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
+      async (_url, _init: any) => {
         return new Response(JSON.stringify({
           choices: [{ message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }]
         }), {
@@ -839,7 +906,7 @@ describe('worker routing', () => {
 
   it('omits previous_response_id from response when not provided in request', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
+      async (_url, _init: any) => {
         return new Response(JSON.stringify({
           choices: [{ message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }]
         }), {
@@ -872,7 +939,7 @@ describe('worker routing', () => {
 
   it('passes through previous_response_id in streaming Responses API response', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
+      async (_url, _init: any) => {
         const body = new ReadableStream({
           start(controller) {
             const encoder = new TextEncoder();
