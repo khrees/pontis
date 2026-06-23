@@ -192,7 +192,11 @@ describe('worker completions routing', () => {
 
     const data = await res.json() as AnthropicResponse;
     expect(data.type).toBe('message');
-    expect((data.content[0] as any).text).toBe('Upstream response');
+    const textBlock = data.content[0];
+    expect(textBlock.type).toBe('text');
+    if (textBlock.type === 'text') {
+      expect(textBlock.text).toBe('Upstream response');
+    }
 
     expect(fetchMock).toHaveBeenCalledWith('https://api.openai.com/v1/completions', expect.objectContaining({
       method: 'POST',

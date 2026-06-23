@@ -1,6 +1,5 @@
 /**
  * API key extraction and validation.
- * Pure functions with no runtime dependencies (testable without CF Workers).
  */
 
 export function extractApiKey(headers: Headers | Record<string, string | null>): string | null {
@@ -29,7 +28,6 @@ export function validateApiKey(key: string | null): AuthError | null {
       body: { error: { type: "authentication_error", message: "API key is too short. Must be at least 32 characters." } },
     };
   }
-  // Only check that the key is non-empty; real validation happens upstream at OpenCode
   return null;
 }
 

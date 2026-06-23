@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { formatOpenAIToAnthropic } from '../src/translate/response/openai-to-anthropic';
 import { formatAnthropicToOpenAI } from '../src/translate/response/anthropic-to-openai';
+import type { AnthropicToolUseBlock } from '../src/types';
+import { anthropicResponse, openAIResponse } from './helpers';
 
 describe('formatOpenAIToAnthropic (OpenAI → Anthropic response)', () => {
   it('converts a text response', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{ message: { role: 'assistant', content: 'Hello!' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-    } as any, 'claude-sonnet-4-20250514') as any;
+    }), 'claude-sonnet-4-20250514');
     expect(result.type).toBe('message');
     expect(result.role).toBe('assistant');
     expect(result.content).toEqual([{ text: 'Hello!', type: 'text' }]);
@@ -20,9 +22,9 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic response)', () => {
   });
 
   it('converts reasoning_content to an Anthropic thinking block', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{ message: { role: 'assistant', reasoning_content: 'internal reasoning', content: 'final answer' }, finish_reason: 'stop' }],
-    } as any, 'deepseek-reasoner') as any;
+    }), 'deepseek-reasoner');
     expect(result.content).toEqual([
       { type: 'thinking', thinking: 'internal reasoning', signature: '' },
       { text: 'final answer', type: 'text' },
@@ -30,10 +32,11 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic response)', () => {
   });
 
   it('converts a tool call response', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{
         message: {
           role: 'assistant',
+          content: null,
           tool_calls: [{
             id: 'call_001',
             type: 'function',
@@ -42,18 +45,20 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic response)', () => {
         },
         finish_reason: 'tool_calls',
       }],
-    } as any, 'claude-sonnet-4-20250514') as any;
-    expect(result.content[0].type).toBe('tool_use');
-    expect(result.content[0].name).toBe('get_weather');
-    expect(result.content[0].input).toEqual({ city: 'Paris' });
+    }), 'claude-sonnet-4-20250514');
+    const toolUse = result.content[0] as AnthropicToolUseBlock;
+    expect(toolUse.type).toBe('tool_use');
+    expect(toolUse.name).toBe('get_weather');
+    expect(toolUse.input).toEqual({ city: 'Paris' });
     expect(result.stop_reason).toBe('tool_use');
   });
 
   it('does not throw on malformed tool call arguments', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{
         message: {
           role: 'assistant',
+          content: null,
           tool_calls: [{
             id: 'call_001',
             type: 'function',
@@ -62,51 +67,53 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic response)', () => {
         },
         finish_reason: 'tool_calls',
       }],
-    } as any, 'claude-sonnet-4-20250514') as any;
-    expect(result.content[0].input).toEqual({});
+    }), 'claude-sonnet-4-20250514');
+    const toolUse = result.content[0] as AnthropicToolUseBlock;
+    expect(toolUse.input).toEqual({});
   });
 
   it('maps finish_reason "length" to "max_tokens"', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{ message: { role: 'assistant', content: 'truncated...' }, finish_reason: 'length' }],
-    } as any, 'claude-sonnet-4-20250514') as any;
+    }), 'claude-sonnet-4-20250514');
     expect(result.stop_reason).toBe('max_tokens');
   });
 
   it('maps finish_reason "stop" to "end_turn"', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{ message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }],
-    } as any, 'claude-sonnet-4-20250514') as any;
+    }), 'claude-sonnet-4-20250514');
     expect(result.stop_reason).toBe('end_turn');
   });
 
   it('handles missing usage gracefully', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{ message: { role: 'assistant', content: 'Hi' }, finish_reason: 'stop' }],
-    } as any, 'claude-sonnet-4-20250514') as any;
+    }), 'claude-sonnet-4-20250514');
     expect(result.usage).toBeUndefined();
   });
 
   it('includes cache_read_input_tokens from cached_tokens', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{ message: { role: 'assistant', content: 'Hi' }, finish_reason: 'stop' }],
       usage: {
         prompt_tokens: 1000,
         completion_tokens: 50,
+        total_tokens: 1050,
         prompt_tokens_details: { cached_tokens: 400 },
       },
-    } as any, 'claude-sonnet-4-20250514') as any;
-    expect(result.usage.cache_read_input_tokens).toBe(400);
-    expect(result.usage.cache_creation_input_tokens).toBe(0);
-    expect(result.usage.input_tokens).toBe(600);
-    expect(result.usage.output_tokens).toBe(50);
+    }), 'claude-sonnet-4-20250514');
+    expect(result.usage?.cache_read_input_tokens).toBe(400);
+    expect(result.usage?.cache_creation_input_tokens).toBe(0);
+    expect(result.usage?.input_tokens).toBe(600);
+    expect(result.usage?.output_tokens).toBe(50);
   });
 
   it('maps OpenAI-compatible input_tokens/output_tokens usage to Anthropic usage', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{ message: { role: 'assistant', content: 'Hi' }, finish_reason: 'stop' }],
-      usage: { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 400 },
-    } as any, 'deepseek-v4-pro') as any;
+      usage: { prompt_tokens: 1000, completion_tokens: 50, total_tokens: 1050, input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 400 },
+    }), 'deepseek-v4-pro');
     expect(result.usage).toEqual({
       input_tokens: 600,
       output_tokens: 50,
@@ -116,28 +123,28 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic response)', () => {
   });
 
   it('sets cache_read_input_tokens to 0 when no cached_tokens', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{ message: { role: 'assistant', content: 'Hi' }, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 200, completion_tokens: 30 },
-    } as any, 'claude-sonnet-4-20250514') as any;
-    expect(result.usage.cache_read_input_tokens).toBe(0);
+      usage: { prompt_tokens: 200, completion_tokens: 30, total_tokens: 230 },
+    }), 'claude-sonnet-4-20250514');
+    expect(result.usage?.cache_read_input_tokens).toBe(0);
   });
 
   it('handles content that is not string (e.g. null for tool calls)', () => {
-    const result = formatOpenAIToAnthropic({
+    const result = formatOpenAIToAnthropic(openAIResponse({
       choices: [{ message: { role: 'assistant', content: null }, finish_reason: 'stop' }],
-    } as any, 'claude-sonnet-4-20250514') as any;
+    }), 'claude-sonnet-4-20250514');
     expect(result.content).toEqual([]);
   });
 });
 
 describe('formatAnthropicToOpenAI (Anthropic → OpenAI response)', () => {
   it('converts a text response', () => {
-    const result = formatAnthropicToOpenAI({
+    const result = formatAnthropicToOpenAI(anthropicResponse({
       content: [{ type: 'text', text: 'Hello from Claude!' }],
       stop_reason: 'end_turn',
       usage: { input_tokens: 10, output_tokens: 5 },
-    } as any, 'claude-sonnet-4-20250514') as any;
+    }), 'claude-sonnet-4-20250514');
     expect(result.object).toBe('chat.completion');
     expect(result.model).toBe('claude-sonnet-4-20250514');
     expect(result.choices[0].message.content).toBe('Hello from Claude!');
@@ -146,19 +153,19 @@ describe('formatAnthropicToOpenAI (Anthropic → OpenAI response)', () => {
   });
 
   it('maps prompt_tokens/completion_tokens usage when Anthropic upstream returns OpenAI-compatible usage', () => {
-    const result = formatAnthropicToOpenAI({
+    const result = formatAnthropicToOpenAI(anthropicResponse({
       content: [{ type: 'text', text: 'Hello from Claude!' }],
       stop_reason: 'end_turn',
-      usage: { prompt_tokens: 20, completion_tokens: 8 },
-    } as any, 'claude-sonnet-4-20250514') as any;
+      usage: { input_tokens: 20, output_tokens: 8 },
+    }), 'claude-sonnet-4-20250514');
     expect(result.usage).toEqual({ prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 });
   });
 
   it('converts a tool_use response', () => {
-    const result = formatAnthropicToOpenAI({
+    const result = formatAnthropicToOpenAI(anthropicResponse({
       content: [{ type: 'tool_use', id: 'tool_001', name: 'search', input: { query: 'cats' } }],
       stop_reason: 'tool_use',
-    } as any, 'claude-sonnet-4-20250514') as any;
+    }), 'claude-sonnet-4-20250514');
     expect(result.choices[0].message.tool_calls).toEqual([{
       id: 'tool_001',
       type: 'function',
@@ -168,18 +175,18 @@ describe('formatAnthropicToOpenAI (Anthropic → OpenAI response)', () => {
   });
 
   it('maps stop_reason "max_tokens" to finish_reason "length"', () => {
-    const result = formatAnthropicToOpenAI({
+    const result = formatAnthropicToOpenAI(anthropicResponse({
       content: [{ type: 'text', text: 'truncated' }],
       stop_reason: 'max_tokens',
-    } as any, 'claude-sonnet-4-20250514') as any;
+    }), 'claude-sonnet-4-20250514');
     expect(result.choices[0].finish_reason).toBe('length');
   });
 
   it('handles missing usage', () => {
-    const result = formatAnthropicToOpenAI({
+    const result = formatAnthropicToOpenAI(anthropicResponse({
       content: [{ type: 'text', text: 'Hi' }],
       stop_reason: 'end_turn',
-    } as any, 'claude-sonnet-4-20250514') as any;
+    }), 'claude-sonnet-4-20250514');
     expect(result.usage).toEqual({ prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 });
   });
 });

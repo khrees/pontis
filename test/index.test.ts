@@ -1,7 +1,18 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import worker from '../src/index';
+import type { CodexModelEntry, CodexModelsListResponse, OpenAIResponse } from '../src/types';
+import {
+  findCodexModel,
+  isMessageOutput,
+  parseCapturedBody,
+  parseResponsesJson,
+  type CapturedRequestBody,
+} from './helpers';
 
-declare const process: any;
+interface TestProcess {
+  env: Record<string, string | undefined>;
+}
+declare const process: TestProcess;
 
 const key = 'a'.repeat(32);
 
@@ -192,7 +203,7 @@ describe('worker routing', () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    const json = await response.json() as any;
+    const json = (await response.json()) as CodexModelsListResponse;
     expect(json.models).toBeDefined();
     expect(json.models[0].slug).toBe('mimo-v2.5-free');
     expect(json.models[0].shell_type).toBe('shell_command');
@@ -218,7 +229,7 @@ describe('worker routing', () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    const json = await response.json() as any;
+    const json = (await response.json()) as CodexModelEntry;
     expect(json.slug).toBe('big-pickle');
     expect(json.shell_type).toBe('shell_command');
     expect(json.apply_patch_tool_type).toBe('freeform');
@@ -226,10 +237,10 @@ describe('worker routing', () => {
   });
 
   it('overrides model from URL path segment with /go prefix', async () => {
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -247,15 +258,15 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('minimax-m2.5-free');
+    expect(capturedBody!.model).toBe('minimax-m2.5-free');
     expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/go/v1/chat/completions', expect.anything());
   });
 
   it('overrides model from URL path segment with /zen prefix', async () => {
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -273,7 +284,7 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('minimax-m2.5-free');
+    expect(capturedBody!.model).toBe('minimax-m2.5-free');
     expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/v1/chat/completions', expect.anything());
   });
 
@@ -295,15 +306,15 @@ describe('worker routing', () => {
     });
 
     const response = await worker.fetch(request);
-    const body = await response.json() as any;
+    const body = (await response.json()) as OpenAIResponse;
     expect(body.model).toBe('claude-sonnet-4-5-20250514');
   });
 
   it('does not override model when no model segment in path', async () => {
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -321,14 +332,14 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('mistral-custom-model');
+    expect(capturedBody!.model).toBe('mistral-custom-model');
   });
 
   it('overrides model to qwen3.6-plus when image attachments are present on the go path', async () => {
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -354,19 +365,19 @@ describe('worker routing', () => {
 
     await worker.fetch(request);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(capturedBody.model).toBe('qwen3.6-plus');
-    expect(Array.isArray(capturedBody.messages[0].content)).toBe(true);
-    expect(capturedBody.messages[0].content).toEqual([
+    expect(capturedBody!.model).toBe('qwen3.6-plus');
+    expect(Array.isArray(capturedBody!.messages[0].content)).toBe(true);
+    expect(capturedBody!.messages[0].content).toEqual([
       { type: 'text', text: 'What is in this image?' },
       { type: 'image_url', image_url: { url: 'data:image/png;base64,abc123' } },
     ]);
   });
 
   it('overrides model to qwen3.6-plus when image attachments are present on the zen path', async () => {
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -391,7 +402,7 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('qwen3.6-plus');
+    expect(capturedBody!.model).toBe('qwen3.6-plus');
   });
 
   it('respects PONTIS_UPSTREAM_URL and PONTIS_UPSTREAM_FORMAT env vars and bypasses model remapping/key validation', async () => {
@@ -399,13 +410,13 @@ describe('worker routing', () => {
     process.env.PONTIS_UPSTREAM_FORMAT = 'openai';
 
     let capturedUrl = '';
-    let capturedBody: any = null;
-    let capturedHeaders: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
+    let capturedHeaders: Record<string, string> | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (url, init: any) => {
+      async (url, init?: RequestInit) => {
         capturedUrl = url.toString();
-        capturedBody = JSON.parse(init.body);
-        capturedHeaders = init.headers;
+        capturedBody = parseCapturedBody(init?.body);
+        capturedHeaders = init?.headers as Record<string, string>;
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -429,8 +440,8 @@ describe('worker routing', () => {
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
     expect(capturedUrl).toBe('http://localhost:11434/v1/chat/completions');
-    expect(capturedBody.model).toBe('my-custom-local-llama'); // verify no model remapping
-    expect(capturedHeaders['Authorization']).toBe('Bearer short-local-key');
+    expect(capturedBody!.model).toBe('my-custom-local-llama'); // verify no model remapping
+    expect(capturedHeaders!['Authorization']).toBe('Bearer short-local-key');
 
     // Clean up env vars
     delete process.env.PONTIS_UPSTREAM_URL;
@@ -442,11 +453,11 @@ describe('worker routing', () => {
     process.env.PONTIS_UPSTREAM_FORMAT = 'openai-completions';
 
     let capturedUrl = '';
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (url, init: any) => {
+      async (url, init?: RequestInit) => {
         capturedUrl = url.toString();
-        capturedBody = JSON.parse(init.body);
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ id: '123', choices: [{ text: 'ok', finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -469,7 +480,7 @@ describe('worker routing', () => {
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
     expect(capturedUrl).toBe('http://localhost:1234/v1/completions');
-    expect(capturedBody.model).toBe('local-codellama'); // verify no model remapping in completions flow
+    expect(capturedBody!.model).toBe('local-codellama'); // verify no model remapping in completions flow
 
     delete process.env.PONTIS_UPSTREAM_URL;
     delete process.env.PONTIS_UPSTREAM_FORMAT;
@@ -484,10 +495,10 @@ describe('worker routing', () => {
 
   it('remaps GPT models to default free model under OpenCode upstream but preserves them under local upstream', async () => {
     // 1. OpenCode upstream (remaps gpt to mimo-v2.5-free)
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -505,7 +516,7 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('mimo-v2.5-free');
+    expect(capturedBody!.model).toBe('mimo-v2.5-free');
 
     // Restore mock for second run
     vi.restoreAllMocks();
@@ -514,10 +525,10 @@ describe('worker routing', () => {
     process.env.PONTIS_UPSTREAM_URL = 'http://localhost:11434/v1';
     process.env.PONTIS_UPSTREAM_FORMAT = 'openai';
 
-    let capturedLocalBody: any = null;
+    let capturedLocalBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedLocalBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedLocalBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -538,7 +549,7 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(localRequest);
-    expect(capturedLocalBody.model).toBe('gpt-5.4-mini');
+    expect(capturedLocalBody!.model).toBe('gpt-5.4-mini');
 
     delete process.env.PONTIS_UPSTREAM_URL;
     delete process.env.PONTIS_UPSTREAM_FORMAT;
@@ -546,10 +557,10 @@ describe('worker routing', () => {
 
   it('remaps GPT models to dynamic PONTIS_MODEL environment variable if set', async () => {
     process.env.PONTIS_MODEL = 'big-pickle';
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -567,17 +578,17 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('big-pickle');
+    expect(capturedBody!.model).toBe('big-pickle');
 
     vi.restoreAllMocks();
     delete process.env.PONTIS_MODEL;
   });
 
   it('remaps GPT models to default free model under OpenCode upstream for chat completions pass-through', async () => {
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -595,15 +606,15 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('mimo-v2.5-free');
+    expect(capturedBody!.model).toBe('mimo-v2.5-free');
     vi.restoreAllMocks();
   });
 
   it('remaps GPT models to default free model under OpenCode upstream for legacy completions translation', async () => {
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -621,15 +632,15 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('mimo-v2.5-free');
+    expect(capturedBody!.model).toBe('mimo-v2.5-free');
     vi.restoreAllMocks();
   });
 
   it('remaps GPT models to default free model under OpenCode upstream for responses API', async () => {
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -650,21 +661,25 @@ describe('worker routing', () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    expect(capturedBody.model).toBe('mimo-v2.5-free');
+    expect(capturedBody!.model).toBe('mimo-v2.5-free');
 
-    const resJson = await response.json() as any;
+    const resJson = await parseResponsesJson(response);
     expect(resJson.object).toBe('response');
     expect(resJson.model).toBe('gpt-5.4-mini');
-    expect(resJson.output[0].content[0].text).toBe('ok');
+    const firstOutput = resJson.output[0];
+    expect(isMessageOutput(firstOutput)).toBe(true);
+    if (isMessageOutput(firstOutput)) {
+      expect(firstOutput.content[0].text).toBe('ok');
+    }
 
     vi.restoreAllMocks();
   });
 
   it('remaps paid OpenCode models to free counterparts under OpenCode upstream', async () => {
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -684,9 +699,9 @@ describe('worker routing', () => {
 
     const response1 = await worker.fetch(request1);
     expect(response1.status).toBe(200);
-    expect(capturedBody.model).toBe('deepseek-v4-flash-free');
+    expect(capturedBody!.model).toBe('deepseek-v4-flash-free');
 
-    const resJson1 = await response1.json() as any;
+    const resJson1 = await parseResponsesJson(response1);
     expect(resJson1.model).toBe('deepseek-v4-flash');
 
     // Test mimo paid to free
@@ -701,9 +716,9 @@ describe('worker routing', () => {
 
     const response2 = await worker.fetch(request2);
     expect(response2.status).toBe(200);
-    expect(capturedBody.model).toBe('mimo-v2.5-free');
+    expect(capturedBody!.model).toBe('mimo-v2.5-free');
 
-    const resJson2 = await response2.json() as any;
+    const resJson2 = await parseResponsesJson(response2);
     expect(resJson2.model).toBe('mimo-v2.5');
 
     vi.restoreAllMocks();
@@ -728,33 +743,33 @@ describe('worker routing', () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    const json = await response.json() as any;
+    const json = (await response.json()) as CodexModelsListResponse;
     expect(json.models).toBeDefined();
     expect(json.models.length).toBeGreaterThanOrEqual(2);
 
-    const mimo = json.models.find((m: any) => m.slug === 'mimo-v2.5-free');
-    const north = json.models.find((m: any) => m.slug === 'north-mini-code-free');
+    const mimo = findCodexModel(json.models, 'mimo-v2.5-free');
+    const north = findCodexModel(json.models, 'north-mini-code-free');
     expect(mimo).toBeDefined();
     expect(north).toBeDefined();
-    expect(mimo.supports_structured_tool_calls).toBe(true);
+    expect(mimo!.supports_structured_tool_calls).toBe(true);
 
     // mimo has a larger context window than north
-    expect(mimo.context_window).toBe(131072);
-    expect(north.context_window).toBe(65536);
+    expect(mimo!.context_window).toBe(131072);
+    expect(north!.context_window).toBe(65536);
 
     // mimo supports reasoning, north does not
-    expect(mimo.default_reasoning_level).toBe('medium');
-    expect(north.default_reasoning_level).toBe('none');
-    expect(mimo.supports_reasoning_summaries).toBe(true);
-    expect(north.supports_reasoning_summaries).toBe(false);
+    expect(mimo!.default_reasoning_level).toBe('medium');
+    expect(north!.default_reasoning_level).toBe('none');
+    expect(mimo!.supports_reasoning_summaries).toBe(true);
+    expect(north!.supports_reasoning_summaries).toBe(false);
 
     // north has smaller max_output_tokens
-    expect(mimo.max_output_tokens).toBe(16384);
-    expect(north.max_output_tokens).toBe(8192);
+    expect(mimo!.max_output_tokens).toBe(16384);
+    expect(north!.max_output_tokens).toBe(8192);
 
     // truncation policy should match context_window
-    expect(mimo.truncation_policy.limit).toBe(131072);
-    expect(north.truncation_policy.limit).toBe(65536);
+    expect(mimo!.truncation_policy.limit).toBe(131072);
+    expect(north!.truncation_policy.limit).toBe(65536);
   });
 
   it('includes custom PONTIS_MODEL in Codex models list if not returned by upstream', async () => {
@@ -779,12 +794,12 @@ describe('worker routing', () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    const json = await response.json() as any;
+    const json = (await response.json()) as CodexModelsListResponse;
     expect(json.models).toBeDefined();
     expect(json.models.length).toBeGreaterThanOrEqual(2);
 
-    const mimo = json.models.find((m: any) => m.slug === 'mimo-v2.5-free');
-    const pickle = json.models.find((m: any) => m.slug === 'big-pickle');
+    const mimo = findCodexModel(json.models, 'mimo-v2.5-free');
+    const pickle = findCodexModel(json.models, 'big-pickle');
     expect(mimo).toBeDefined();
     expect(pickle).toBeDefined();
 
@@ -798,10 +813,10 @@ describe('worker routing', () => {
   });
 
   it('includes stream_options with include_usage when streaming Responses API request', async () => {
-    let capturedBody: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
-        capturedBody = JSON.parse(init.body);
+      async (_url, init?: RequestInit) => {
+        capturedBody = parseCapturedBody(init?.body);
         // Return a minimal SSE stream that terminates immediately
         const body = new ReadableStream({
           start(controller) {
@@ -836,8 +851,8 @@ describe('worker routing', () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    expect(capturedBody.stream).toBe(true);
-    expect(capturedBody.stream_options).toEqual({ include_usage: true });
+    expect(capturedBody!.stream).toBe(true);
+    expect(capturedBody!.stream_options).toEqual({ include_usage: true });
 
     vi.restoreAllMocks();
   });
@@ -860,17 +875,17 @@ describe('worker routing', () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    const json = await response.json() as any;
-    const deepseek = json.models.find((m: any) => m.slug === 'deepseek-v4-flash-free');
+    const json = (await response.json()) as CodexModelsListResponse;
+    const deepseek = findCodexModel(json.models, 'deepseek-v4-flash-free');
     expect(deepseek).toBeDefined();
-    expect(deepseek.context_window).toBe(131072);
-    expect(deepseek.truncation_policy.limit).toBe(131072);
-    expect(deepseek.supports_parallel_tool_calls).toBe(true);
+    expect(deepseek!.context_window).toBe(131072);
+    expect(deepseek!.truncation_policy.limit).toBe(131072);
+    expect(deepseek!.supports_parallel_tool_calls).toBe(true);
   });
 
   it('passes through previous_response_id in non-streaming Responses API response', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, _init: any) => {
+      async (_url, _init?: RequestInit) => {
         return new Response(JSON.stringify({
           choices: [{ message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }]
         }), {
@@ -897,7 +912,7 @@ describe('worker routing', () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    const json = await response.json() as any;
+    const json = await parseResponsesJson(response);
     expect(json.object).toBe('response');
     expect(json.previous_response_id).toBe('resp_prev_12345');
 
@@ -906,7 +921,7 @@ describe('worker routing', () => {
 
   it('omits previous_response_id from response when not provided in request', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, _init: any) => {
+      async (_url, _init?: RequestInit) => {
         return new Response(JSON.stringify({
           choices: [{ message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }]
         }), {
@@ -931,7 +946,7 @@ describe('worker routing', () => {
     });
 
     const response = await worker.fetch(request);
-    const json = await response.json() as any;
+    const json = await parseResponsesJson(response);
     expect(json.previous_response_id).toBeUndefined();
 
     vi.restoreAllMocks();
@@ -939,7 +954,7 @@ describe('worker routing', () => {
 
   it('passes through previous_response_id in streaming Responses API response', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, _init: any) => {
+      async (_url, _init?: RequestInit) => {
         const body = new ReadableStream({
           start(controller) {
             const encoder = new TextEncoder();

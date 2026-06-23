@@ -66,7 +66,7 @@ jobs:
 
       - name: Build proxy JS bundle
         if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
-        run: npx esbuild src/local-server.ts --bundle --platform=node --target=node18 --outfile=dist/proxy.js
+        run: npm run build:proxy
 
       - name: Build native binaries
         if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''

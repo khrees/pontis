@@ -1,11 +1,13 @@
+import type { OpenAIUsage, ResponsesApiUsage, ResponsesOutputItem } from "../../types";
+
 /**
  * Callback fired when the stream completes, with the final state for caching.
  * The caller can use this to persist conversation state for multi-turn.
  */
 export interface StreamCompleteEvent {
   responseId: string;
-  output: any[];
-  usage: Record<string, number>;
+  output: ResponsesOutputItem[];
+  usage: ResponsesApiUsage;
   model: string;
 }
 
@@ -48,8 +50,8 @@ export function streamChatToResponses(
   let pendingText = "";
   let inDsml = false;
   let toolCallCount = 0;
-  let accumulatedUsage: any = null;
-  const completedOutputs: any[] = [];
+  let accumulatedUsage: OpenAIUsage | null = null;
+  const completedOutputs: ResponsesOutputItem[] = [];
 
   function ensureTextItem(controller: ReadableStreamDefaultController<Uint8Array>) {
     if (!textItemStarted) {
@@ -472,11 +474,10 @@ export function streamChatToResponses(
           // Finalize any active tool calls
           finalizeToolCalls(controller);
 
-          const u = accumulatedUsage || {};
-          const promptTokens = u.prompt_tokens || u.input_tokens || 0;
-          const completionTokens = u.completion_tokens || u.output_tokens || 0;
-          const totalTokens = u.total_tokens || (promptTokens + completionTokens);
-          const cachedRead = u.cache_read_input_tokens || u.prompt_tokens_details?.cached_tokens || u.input_tokens_details?.cached_tokens || 0;
+          const promptTokens = accumulatedUsage?.prompt_tokens || accumulatedUsage?.input_tokens || 0;
+          const completionTokens = accumulatedUsage?.completion_tokens || accumulatedUsage?.output_tokens || 0;
+          const totalTokens = accumulatedUsage?.total_tokens || (promptTokens + completionTokens);
+          const cachedRead = accumulatedUsage?.cache_read_input_tokens || accumulatedUsage?.prompt_tokens_details?.cached_tokens || accumulatedUsage?.input_tokens_details?.cached_tokens || 0;
 
           // event: response.completed
           enqueueSSE(controller, "response.completed", {
@@ -501,17 +502,16 @@ export function streamChatToResponses(
           });
 
           if (onComplete) {
-            const uu = accumulatedUsage || {};
             onComplete({
               responseId: resolvedId,
               output: completedOutputs,
               usage: {
-                input_tokens: uu.prompt_tokens || uu.input_tokens || 0,
-                output_tokens: uu.completion_tokens || uu.output_tokens || 0,
-                prompt_tokens: uu.prompt_tokens || uu.input_tokens || 0,
-                completion_tokens: uu.completion_tokens || uu.output_tokens || 0,
-                total_tokens: uu.total_tokens || 0,
-                cache_read_input_tokens: uu.cache_read_input_tokens || uu.prompt_tokens_details?.cached_tokens || uu.input_tokens_details?.cached_tokens || 0,
+                input_tokens: accumulatedUsage?.prompt_tokens || accumulatedUsage?.input_tokens || 0,
+                output_tokens: accumulatedUsage?.completion_tokens || accumulatedUsage?.output_tokens || 0,
+                prompt_tokens: accumulatedUsage?.prompt_tokens || accumulatedUsage?.input_tokens || 0,
+                completion_tokens: accumulatedUsage?.completion_tokens || accumulatedUsage?.output_tokens || 0,
+                total_tokens: accumulatedUsage?.total_tokens || 0,
+                cache_read_input_tokens: accumulatedUsage?.cache_read_input_tokens || accumulatedUsage?.prompt_tokens_details?.cached_tokens || accumulatedUsage?.input_tokens_details?.cached_tokens || 0,
                 cache_creation_input_tokens: 0,
               },
               model: originalModel,

@@ -6,6 +6,15 @@ import {
   extractUsage,
 } from "../src/translate/request/responses-to-chat";
 import { ResponsesCache } from "../src/responses-cache";
+import type { CodexModelsListResponse, OpenAIMessage } from "../src/types";
+import {
+  emptyResponsesUsage,
+  isFunctionCallOutput,
+  isMessageOutput,
+  parseCapturedBody,
+  parseResponsesJson,
+  asResponseCompletedEvent,
+} from "./helpers";
 
 // =============================================================================
 // ResponsesCache
@@ -23,7 +32,7 @@ describe("ResponsesCache", () => {
       model: "mimo-v2.5-free",
       originalModel: "gpt-4",
       fullMessages: [{ role: "user", content: "hi" }],
-      usage: { input_tokens: 10, output_tokens: 5 },
+      usage: emptyResponsesUsage({ input_tokens: 10, output_tokens: 5 }),
     });
     const entry = cache.get("resp_1");
     expect(entry).toBeDefined();
@@ -43,7 +52,7 @@ describe("ResponsesCache", () => {
       model: "test",
       originalModel: "test",
       fullMessages: [],
-      usage: {},
+      usage: emptyResponsesUsage(),
     });
     // Wait for expiry
     await new Promise((r) => setTimeout(r, 20));
@@ -57,21 +66,21 @@ describe("ResponsesCache", () => {
       model: "test",
       originalModel: "test",
       fullMessages: [],
-      usage: {},
+      usage: emptyResponsesUsage(),
     });
     cache.set("resp_2", {
       responseId: "resp_2",
       model: "test",
       originalModel: "test",
       fullMessages: [],
-      usage: {},
+      usage: emptyResponsesUsage(),
     });
     cache.set("resp_3", {
       responseId: "resp_3",
       model: "test",
       originalModel: "test",
       fullMessages: [],
-      usage: {},
+      usage: emptyResponsesUsage(),
     });
     // resp_1 should be evicted
     expect(cache.get("resp_1")).toBeUndefined();
@@ -86,14 +95,14 @@ describe("ResponsesCache", () => {
       model: "test",
       originalModel: "test",
       fullMessages: [],
-      usage: {},
+      usage: emptyResponsesUsage(),
     });
     cache.set("resp_2", {
       responseId: "resp_2",
       model: "test",
       originalModel: "test",
       fullMessages: [],
-      usage: {},
+      usage: emptyResponsesUsage(),
     });
     // Access resp_1, making it recently used
     cache.get("resp_1");
@@ -103,7 +112,7 @@ describe("ResponsesCache", () => {
       model: "test",
       originalModel: "test",
       fullMessages: [],
-      usage: {},
+      usage: emptyResponsesUsage(),
     });
     expect(cache.get("resp_1")).toBeDefined();
     expect(cache.get("resp_2")).toBeUndefined();
@@ -117,14 +126,14 @@ describe("ResponsesCache", () => {
       model: "test",
       originalModel: "test",
       fullMessages: [],
-      usage: {},
+      usage: emptyResponsesUsage(),
     });
     cache.set("resp_2", {
       responseId: "resp_2",
       model: "test",
       originalModel: "test",
       fullMessages: [],
-      usage: {},
+      usage: emptyResponsesUsage(),
     });
     const keys = cache.keys();
     expect(keys[0]).toBe("resp_2");
@@ -139,7 +148,7 @@ describe("ResponsesCache", () => {
       model: "test",
       originalModel: "test",
       fullMessages: [],
-      usage: {},
+      usage: emptyResponsesUsage(),
     });
     expect(cache.size).toBe(1);
   });
@@ -158,7 +167,6 @@ describe("responsesToChatMessages", () => {
       "mimo-v2.5-free",
     );
     expect(result.messages).toEqual([{ role: "user", content: "Hello" }]);
-    expect(result.dsmlFallbackActive).toBe(false);
   });
 
   it("handles string content", () => {
@@ -207,8 +215,9 @@ describe("responsesToChatMessages", () => {
     expect(result.messages[0].role).toBe("assistant");
     expect(result.messages[0].content).toBe("Let me check that file.");
     expect(result.messages[0].tool_calls).toHaveLength(1);
-    expect(result.messages[0].tool_calls[0].id).toBe("call_123");
-    expect(result.messages[0].tool_calls[0].function.name).toBe("read_file");
+    const toolCall = result.messages[0].tool_calls![0];
+    expect(toolCall.id).toBe("call_123");
+    expect(toolCall.function.name).toBe("read_file");
   });
 
   it("converts tool_result items to tool role messages", () => {
@@ -320,7 +329,7 @@ describe("responsesToChatMessages", () => {
     );
     expect(result.messages).toHaveLength(5);
     expect(result.messages[0].content).toBe("summarize repo");
-    expect(result.messages[1].tool_calls[0].function.name).toBe("exec_command");
+    expect(result.messages[1].tool_calls![0].function.name).toBe("exec_command");
     expect(result.messages[2].content).toContain("total 128");
     expect(result.messages[4].content).toBe("# Pontis");
   });
@@ -383,12 +392,12 @@ describe("responsesToChatMessages", () => {
     );
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0].role).toBe("assistant");
-    expect(result.messages[0].tool_calls[0].id).toBe("call_1");
-    expect(result.messages[0].tool_calls[0].function.name).toBe("Read");
+    expect(result.messages[0].tool_calls![0].id).toBe("call_1");
+    expect(result.messages[0].tool_calls![0].function.name).toBe("Read");
   });
 
   it("preserves tool results on follow-up turns via cache", () => {
-    const prevMessages = [
+    const prevMessages: OpenAIMessage[] = [
       { role: "system", content: "You are a helpful assistant." },
       { role: "user", content: "Summarize this repo" },
       {
@@ -425,7 +434,7 @@ describe("responsesToChatMessages", () => {
   });
 
   it("does not re-add instructions when continuing a cached conversation", () => {
-    const prevMessages = [
+    const prevMessages: OpenAIMessage[] = [
       { role: "system", content: "Original instructions" },
       { role: "user", content: "Hi" },
       { role: "assistant", content: "Hello!" },
@@ -443,7 +452,7 @@ describe("responsesToChatMessages", () => {
   });
 
   it("preserves conversation from cache", () => {
-    const prevMessages = [
+    const prevMessages: OpenAIMessage[] = [
       { role: "user", content: "What files exist?" },
       { role: "assistant", content: "Let me check.", tool_calls: [] },
     ];
@@ -463,7 +472,7 @@ describe("responsesToChatMessages", () => {
   it("deduplicates cached messages from the previous turn", () => {
     // When the cache and the current input both start with the same user message,
     // we should not duplicate it.
-    const prevMessages = [
+    const prevMessages: OpenAIMessage[] = [
       { role: "user", content: "Hi" },
       { role: "assistant", content: "Hello!" },
     ];
@@ -480,10 +489,7 @@ describe("responsesToChatMessages", () => {
     expect(result.messages[2].content).toBe("How are you?");
   });
 
-  it("activates DSML fallback for models without structured tool call support", () => {
-    // "north-mini-code-free" currently has supports_structured_tool_calls: true
-    // In the future if we add models without it, this would test the flag.
-    // For now, ALL known models support structured tool calls, so DSML is never active.
+  it("does not inject DSML fallback for models with structured tool calls", () => {
     const result = responsesToChatMessages(
       {
         tools: [
@@ -493,8 +499,8 @@ describe("responsesToChatMessages", () => {
       },
       "mimo-v2.5-free",
     );
-    // mimo-v2.5-free has supports_structured_tool_calls: true, so no DSML
-    expect(result.dsmlFallbackActive).toBe(false);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toEqual({ role: "user", content: "Read file" });
   });
 
   it("handles developer role as system", () => {
@@ -543,7 +549,7 @@ describe("responsesToChatMessages", () => {
       },
       "mimo-v2.5-free",
     );
-    expect(result.messages[0].tool_calls[0].function.arguments).toBe(
+    expect(result.messages[0].tool_calls![0].function.arguments).toBe(
       '{"command": "ls"}',
     );
   });
@@ -620,8 +626,8 @@ describe("buildChatRequest", () => {
       [],
     );
     expect(req.tools).toHaveLength(1);
-    expect(req.tools[0].type).toBe("function");
-    expect(req.tools[0].function.name).toBe("read_file");
+    expect(req.tools![0].type).toBe("function");
+    expect(req.tools![0].function.name).toBe("read_file");
   });
 
   it("handles legacy tools format (with function wrapper)", () => {
@@ -641,7 +647,7 @@ describe("buildChatRequest", () => {
       [],
     );
     expect(req.tools).toHaveLength(1);
-    expect(req.tools[0].function.name).toBe("bash");
+    expect(req.tools![0].function.name).toBe("bash");
   });
 
   it("forwards max_tokens and temperature", () => {
@@ -674,11 +680,15 @@ describe("chatResponseToOutput", () => {
     const { output } = chatResponseToOutput({ content: "Hello!" });
     expect(output).toHaveLength(1);
     expect(output[0].type).toBe("message");
-    expect(output[0].content[0].text).toBe("Hello!");
+    const message = output[0];
+    expect(isMessageOutput(message)).toBe(true);
+    if (isMessageOutput(message)) {
+      expect(message.content[0].text).toBe("Hello!");
+    }
   });
 
   it("converts tool_calls to function_call outputs", () => {
-    const { output, hasToolCalls } = chatResponseToOutput({
+    const { output } = chatResponseToOutput({
       content: "Let me check.",
       tool_calls: [
         {
@@ -691,27 +701,24 @@ describe("chatResponseToOutput", () => {
     expect(output).toHaveLength(2);
     expect(output[0].type).toBe("message");
     expect(output[1].type).toBe("function_call");
-    expect(output[1].name).toBe("read_file");
-    expect(output[1].call_id).toBe("call_1");
-    expect(output[1].arguments).toBe('{"path":"/test.txt"}');
-    expect(hasToolCalls).toBe(true);
+    const fnCall = output[1];
+    expect(isFunctionCallOutput(fnCall)).toBe(true);
+    if (isFunctionCallOutput(fnCall)) {
+      expect(fnCall.name).toBe("read_file");
+      expect(fnCall.call_id).toBe("call_1");
+      expect(fnCall.arguments).toBe('{"path":"/test.txt"}');
+    }
   });
 
   it("returns fallback empty output for empty message", () => {
     const { output } = chatResponseToOutput({});
     expect(output).toHaveLength(1);
     expect(output[0].type).toBe("message");
-    expect(output[0].content[0].text).toBe("");
-  });
-
-  it("reports hasToolCalls correctly", () => {
-    expect(chatResponseToOutput({ content: "Hi" }).hasToolCalls).toBe(false);
-    expect(
-      chatResponseToOutput({
-        tool_calls: [{ id: "c1", function: { name: "bash", arguments: "{}" } }],
-      }).hasToolCalls,
-    ).toBe(true);
-    expect(chatResponseToOutput({}).hasToolCalls).toBe(false);
+    const message = output[0];
+    expect(isMessageOutput(message)).toBe(true);
+    if (isMessageOutput(message)) {
+      expect(message.content[0].text).toBe("");
+    }
   });
 
   it("handles tool_calls without explicit content", () => {
@@ -727,7 +734,11 @@ describe("chatResponseToOutput", () => {
     // No text content = no message output, only the tool call
     expect(output).toHaveLength(1);
     expect(output[0].type).toBe("function_call");
-    expect(output[0].status).toBe("completed");
+    const fnCall = output[0];
+    expect(isFunctionCallOutput(fnCall)).toBe(true);
+    if (isFunctionCallOutput(fnCall)) {
+      expect(fnCall.status).toBe("completed");
+    }
   });
 });
 
@@ -893,7 +904,7 @@ describe("Responses API streaming events", () => {
     const decoder = new TextDecoder();
     let fullOutput = "";
     const eventTypes: string[] = [];
-    const eventData: any[] = [];
+    const eventData: unknown[] = [];
 
     while (true) {
       const { done, value } = await reader.read();
@@ -939,7 +950,7 @@ describe("Responses API streaming events", () => {
     expect(eventTypes[eventTypes.length - 1]).toBe("response.completed");
 
     // Verify response.completed has output items
-    const completedEvent = eventData[eventData.length - 1];
+    const completedEvent = asResponseCompletedEvent(eventData[eventData.length - 1]);
     expect(completedEvent.response.output).toBeDefined();
     expect(completedEvent.response.output.length).toBeGreaterThanOrEqual(1);
   });
@@ -1092,9 +1103,13 @@ describe("Responses API integration", () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    const json: any = await response.json();
+    const json = await parseResponsesJson(response);
     expect(json.object).toBe("response");
-    expect(json.output[0].content[0].text).toBe("Hello!");
+    const first = json.output[0];
+    expect(isMessageOutput(first)).toBe(true);
+    if (isMessageOutput(first)) {
+      expect(first.content[0].text).toBe("Hello!");
+    }
   });
 
   it("handles responses with tool calls in non-streaming mode", async () => {
@@ -1138,13 +1153,17 @@ describe("Responses API integration", () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    const json: any = await response.json();
+    const json = await parseResponsesJson(response);
     expect(json.object).toBe("response");
     expect(json.output).toHaveLength(2);
     expect(json.output[0].type).toBe("message");
     expect(json.output[1].type).toBe("function_call");
-    expect(json.output[1].name).toBe("read_file");
-    expect(json.output[1].status).toBe("completed");
+    const fnCall = json.output[1];
+    expect(isFunctionCallOutput(fnCall)).toBe(true);
+    if (isFunctionCallOutput(fnCall)) {
+      expect(fnCall.name).toBe("read_file");
+      expect(fnCall.status).toBe("completed");
+    }
   });
 
   it("handles multi-turn conversation via cache", async () => {
@@ -1178,7 +1197,7 @@ describe("Responses API integration", () => {
 
     const response1 = await worker.fetch(request1);
     expect(response1.status).toBe(200);
-    const json1: any = await response1.json();
+    const json1 = await parseResponsesJson(response1);
     const firstResponseId = json1.id;
     expect(firstResponseId).toBeDefined();
 
@@ -1211,12 +1230,16 @@ describe("Responses API integration", () => {
 
     const response2 = await worker.fetch(request2);
     expect(response2.status).toBe(200);
-    const json2: any = await response2.json();
+    const json2 = await parseResponsesJson(response2);
     expect(json2.object).toBe("response");
-    expect(json2.output[0].content[0].text).toBe("How can I help?");
+    const secondOutput = json2.output[0];
+    expect(isMessageOutput(secondOutput)).toBe(true);
+    if (isMessageOutput(secondOutput)) {
+      expect(secondOutput.content[0].text).toBe("How can I help?");
+    }
 
     // Verify the second request included both the first and second turn messages
-    const capturedBody = JSON.parse(fetchMock.mock.calls[1][1]?.body as string);
+    const capturedBody = parseCapturedBody(fetchMock.mock.calls[1][1]?.body);
     // Should have: first user ("Hi") + first assistant ("Hello!") + second user ("What's up?")
     expect(capturedBody.messages).toHaveLength(3);
     expect(capturedBody.messages[0].content).toBe("Hi");
@@ -1258,9 +1281,9 @@ describe("Responses API integration", () => {
     expect(response.status).toBe(200);
 
     // Verify tools were forwarded to the upstream
-    const capturedBody = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    const capturedBody = parseCapturedBody(fetchMock.mock.calls[0][1]?.body);
     expect(capturedBody.tools).toHaveLength(1);
-    expect(capturedBody.tools[0].function.name).toBe("bash");
+    expect(capturedBody.tools![0].function.name).toBe("bash");
 
     fetchMock.mockRestore();
   });
@@ -1287,7 +1310,7 @@ describe("Responses API integration", () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    const json: any = await response.json();
+    const json = (await response.json()) as CodexModelsListResponse;
     const model = json.models[0];
     expect(model.slug).toBe("mimo-v2.5-free");
     // Check new metadata fields

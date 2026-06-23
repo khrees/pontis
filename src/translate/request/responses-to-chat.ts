@@ -1,52 +1,70 @@
 /**
- * Translates OpenAI Responses API (used by Codex CLI) requests
- * to standard OpenAI Chat Completions format.
- *
- * The Responses API is substantially different from Chat Completions:
- * - It uses `input` (array of items) instead of `messages`
- * - It has `instructions` instead of a system message
- * - Tool calls use `function_call` output items instead of `tool_calls`
- * - Streaming uses different event types (response.* instead of data: chunks)
+ * Translates OpenAI Responses API requests (Codex CLI) to Chat Completions.
  */
 
 import { getModelMetadata } from "../../model-metadata";
+import type {
+  OpenAIMessage,
+  OpenAIRequest,
+  OpenAIUsage,
+  OpenAITool,
+  OpenAIToolCall,
+  ResponseContentPart,
+  ResponseInputItem,
+  ResponsesApiRequest,
+  ResponsesApiTool,
+  ResponsesApiUsage,
+  ResponsesOutputItem,
+} from "../../types";
 
-// ---------------------------------------------------------------------------
-// Responses API → Chat Completions message conversion
-// ---------------------------------------------------------------------------
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
-/**
- * Normalize a Responses API function_call_output value to a string for Chat
- * Completions tool messages.
- */
+function isTextContentPart(
+  part: unknown,
+): part is { type: string; text?: string } {
+  return (
+    isRecord(part) &&
+    (part.type === "input_text" || part.type === "text" || part.type === "output_text")
+  );
+}
+
 function normalizeFunctionCallOutput(output: unknown): string {
   if (typeof output === "string") return output;
   if (Array.isArray(output)) {
     return output
       .map((part) => {
         if (typeof part === "string") return part;
-        if (part?.type === "input_text" || part?.type === "text") {
-          return part.text || "";
-        }
+        if (isTextContentPart(part)) return part.text || "";
         return JSON.stringify(part);
       })
       .join("\n");
   }
-  if (output && typeof output === "object") {
-    const obj = output as Record<string, unknown>;
-    // Codex CLI wraps tool output as { content, success? }
-    if (typeof obj.content === "string") {
-      return obj.content;
-    }
-    if (Array.isArray(obj.content_items)) {
-      return normalizeFunctionCallOutput(obj.content_items);
+  if (isRecord(output)) {
+    if (typeof output.content === "string") return output.content;
+    if (Array.isArray(output.content_items)) {
+      return normalizeFunctionCallOutput(output.content_items);
     }
     return JSON.stringify(output);
   }
   return String(output ?? "");
 }
 
-/** Item types Codex sends in history that have no Chat Completions equivalent. */
+function extractMcpResultContent(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (isRecord(result) && Array.isArray(result.content)) {
+    return result.content
+      .map((block: unknown) => {
+        if (isRecord(block) && typeof block.text === "string") return block.text;
+        return JSON.stringify(block);
+      })
+      .join("\n");
+  }
+  if (isRecord(result)) return JSON.stringify(result);
+  return "";
+}
+
 const SKIPPED_INPUT_TYPES = new Set([
   "reasoning",
   "compaction",
@@ -57,18 +75,31 @@ const SKIPPED_INPUT_TYPES = new Set([
   "local_shell_call",
 ]);
 
-/**
- * Convert a single Responses API input item into one or more Chat Completions
- * messages.
- */
-function inputItemToMessages(inputItem: any): any[] {
-  const messages: any[] = [];
+function normalizeRole(role: string): OpenAIMessage["role"] {
+  if (role === "developer") return "system";
+  if (role === "system" || role === "user" || role === "assistant" || role === "tool") {
+    return role;
+  }
+  return "user";
+}
 
+function makeToolCall(
+  id: string,
+  name: string,
+  args: string,
+): OpenAIToolCall {
+  return {
+    id,
+    type: "function",
+    function: { name, arguments: args },
+  };
+}
+
+function inputItemToMessages(inputItem: ResponseInputItem): OpenAIMessage[] {
   if (inputItem.type && SKIPPED_INPUT_TYPES.has(inputItem.type)) {
     return [];
   }
 
-  // Top-level Responses API items (no role) used by Codex CLI
   if (inputItem.type === "function_call_output") {
     return [
       {
@@ -89,36 +120,31 @@ function inputItemToMessages(inputItem: any): any[] {
         role: "assistant",
         content: null,
         tool_calls: [
-          {
-            id: inputItem.call_id || inputItem.id || "",
-            type: "function",
-            function: {
-              name: inputItem.name || "",
-              arguments: args,
-            },
-          },
+          makeToolCall(
+            inputItem.call_id || inputItem.id || "",
+            inputItem.name || "",
+            args,
+          ),
         ],
       },
     ];
   }
 
   if (inputItem.type === "custom_tool_call") {
+    const args =
+      typeof inputItem.input === "string"
+        ? inputItem.input
+        : JSON.stringify(inputItem.input || {});
     return [
       {
         role: "assistant",
         content: null,
         tool_calls: [
-          {
-            id: inputItem.call_id || inputItem.id || "",
-            type: "function",
-            function: {
-              name: inputItem.name || "",
-              arguments:
-                typeof inputItem.input === "string"
-                  ? inputItem.input
-                  : JSON.stringify(inputItem.input || {}),
-            },
-          },
+          makeToolCall(
+            inputItem.call_id || inputItem.id || "",
+            inputItem.name || "",
+            args,
+          ),
         ],
       },
     ];
@@ -128,30 +154,17 @@ function inputItemToMessages(inputItem: any): any[] {
     return [
       {
         role: "tool",
-        content: inputItem.output || "",
+        content: typeof inputItem.output === "string" ? inputItem.output : "",
         tool_call_id: inputItem.call_id || "",
       },
     ];
   }
 
   if (inputItem.type === "mcp_tool_call_output") {
-    const result = inputItem.result ?? inputItem.output;
-    let content = "";
-    if (typeof result === "string") {
-      content = result;
-    } else if (result && typeof result === "object") {
-      if (Array.isArray((result as any).content)) {
-        content = (result as any).content
-          .map((block: any) => block.text || JSON.stringify(block))
-          .join("\n");
-      } else {
-        content = JSON.stringify(result);
-      }
-    }
     return [
       {
         role: "tool",
-        content,
+        content: extractMcpResultContent(inputItem.result ?? inputItem.output),
         tool_call_id: inputItem.call_id || "",
       },
     ];
@@ -165,8 +178,7 @@ function inputItemToMessages(inputItem: any): any[] {
   }
 
   const role = inputItem.role || "user";
-  const normalizedRole = role === "developer" ? "system" : role;
-
+  const normalizedRole = normalizeRole(role);
   const contentParts = Array.isArray(inputItem.content) ? inputItem.content : [];
   const textParts: string[] = [];
   const toolResults: { tool_use_id: string; content: string }[] = [];
@@ -175,7 +187,7 @@ function inputItemToMessages(inputItem: any): any[] {
   if (typeof inputItem.content === "string") {
     textParts.push(inputItem.content);
   } else if (contentParts.length > 0) {
-    for (const part of contentParts) {
+    for (const part of contentParts as ResponseContentPart[]) {
       if (
         part.type === "input_text" ||
         part.type === "text" ||
@@ -196,7 +208,7 @@ function inputItemToMessages(inputItem: any): any[] {
           typeof part.content === "string"
             ? part.content
             : Array.isArray(part.content)
-              ? part.content.map((c: any) => c.text || "").join("\n")
+              ? part.content.map((c) => c.text || "").join("\n")
               : JSON.stringify(part.content || "");
         toolResults.push({
           tool_use_id: part.tool_use_id || "",
@@ -207,27 +219,25 @@ function inputItemToMessages(inputItem: any): any[] {
   }
 
   if (normalizedRole === "assistant") {
-    const msg: any = { role: "assistant" };
-    msg.content =
-      textParts.length > 0 ? textParts.join("\n").trim() || null : null;
+    const msg: OpenAIMessage = {
+      role: "assistant",
+      content: textParts.length > 0 ? textParts.join("\n").trim() || null : null,
+    };
     if (toolUses.length > 0) {
-      msg.tool_calls = toolUses.map((tu) => ({
-        id: tu.id,
-        type: "function",
-        function: { name: tu.name, arguments: tu.arguments },
-      }));
+      msg.tool_calls = toolUses.map((tu) =>
+        makeToolCall(tu.id, tu.name, tu.arguments),
+      );
     }
-    if (
-      msg.content !== null ||
-      (msg.tool_calls && msg.tool_calls.length > 0)
-    ) {
-      messages.push(msg);
+    if (msg.content !== null || (msg.tool_calls && msg.tool_calls.length > 0)) {
+      return [msg];
     }
-  } else if (normalizedRole === "user") {
+    return [];
+  }
+
+  if (normalizedRole === "user") {
+    const messages: OpenAIMessage[] = [];
     const text = textParts.join("\n").trim();
-    if (text) {
-      messages.push({ role: "user", content: text });
-    }
+    if (text) messages.push({ role: "user", content: text });
     for (const tr of toolResults) {
       messages.push({
         role: "tool",
@@ -235,23 +245,17 @@ function inputItemToMessages(inputItem: any): any[] {
         tool_call_id: tr.tool_use_id,
       });
     }
-  } else {
-    // tool, system, or other role — preserve as-is
-    const text = textParts.join("\n").trim();
-    messages.push({ role: normalizedRole, content: text || "" });
+    return messages;
   }
 
-  return messages;
+  const text = textParts.join("\n").trim();
+  return [{ role: normalizedRole, content: text || "" }];
 }
 
-// ---------------------------------------------------------------------------
-// DSML fallback prompt
-// ---------------------------------------------------------------------------
-
-function buildDsmlPrompt(tools: any[]): string {
+function buildDsmlPrompt(tools: ResponsesApiTool[]): string {
   const toolList = tools
-    .filter((t: any) => t && t.type === "function")
-    .map((t: any) => {
+    .filter((t) => t && t.type === "function")
+    .map((t) => {
       const name = t.name || t.function?.name || "";
       const desc = t.description || t.function?.description || "";
       return `- ${name}: ${desc}`;
@@ -269,16 +273,11 @@ function buildDsmlPrompt(tools: any[]): string {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Tools conversion
-// ---------------------------------------------------------------------------
-
-function convertTools(reqTools: any[]): any[] {
-  if (!Array.isArray(reqTools)) return [];
+function convertTools(reqTools: ResponsesApiTool[]): OpenAITool[] {
   return reqTools
-    .filter((t: any) => t && t.type === "function")
-    .map((t: any) => ({
-      type: "function",
+    .filter((t) => t && t.type === "function")
+    .map((t) => ({
+      type: "function" as const,
       function: {
         name: t.name || t.function?.name || "",
         description: t.description || t.function?.description,
@@ -287,51 +286,33 @@ function convertTools(reqTools: any[]): any[] {
     }));
 }
 
-// ---------------------------------------------------------------------------
-// Main translation function
-// ---------------------------------------------------------------------------
-
 export interface ResponsesToChatResult {
-  /** The full Chat Completions messages array. */
-  messages: any[];
-  /** Whether DSML fallback was injected. */
-  dsmlFallbackActive: boolean;
+  messages: OpenAIMessage[];
 }
 
-/**
- * Translate a Responses API request body into a Chat Completions messages
- * array and related options.
- *
- * @param req - The raw Responses API request body.
- * @param resolvedModel - The model name (after any remapping).
- * @param previousMessages - Cached messages from a previous turn (if any).
- * @returns The translated messages and metadata.
- */
 export function responsesToChatMessages(
-  req: any,
+  req: ResponsesApiRequest,
   resolvedModel: string,
-  previousMessages?: any[],
+  previousMessages?: OpenAIMessage[],
 ): ResponsesToChatResult {
-  const messages: any[] = [];
+  const messages: OpenAIMessage[] = [];
 
-  // 1. Prepend cached conversation history (from previous_response_id)
   if (previousMessages && previousMessages.length > 0) {
     for (const m of previousMessages) {
-      messages.push(JSON.parse(JSON.stringify(m)));
+      messages.push(JSON.parse(JSON.stringify(m)) as OpenAIMessage);
     }
   }
 
-  // 2. Add instructions as system message when Codex sends them separately
-  // from input (skip if input already carries developer/system messages).
   const inputHasSystemMessage =
     Array.isArray(req.input) &&
     req.input.some(
-      (item: any) =>
+      (item) =>
         item.role === "developer" ||
         item.role === "system" ||
         (item.type === "message" &&
           (item.role === "developer" || item.role === "system")),
     );
+
   if (
     req.instructions &&
     (!previousMessages || previousMessages.length === 0) &&
@@ -340,50 +321,36 @@ export function responsesToChatMessages(
     messages.push({ role: "system", content: req.instructions });
   }
 
-  // 3. Check model capability and inject DSML fallback if needed
   const modelMeta = getModelMetadata(resolvedModel);
-  const hasTools =
-    Array.isArray(req.tools) && req.tools.length > 0;
+  const hasTools = Array.isArray(req.tools) && req.tools.length > 0;
   const needsDsmlFallback =
     hasTools && !modelMeta.supports_structured_tool_calls;
 
-  if (needsDsmlFallback) {
+  if (needsDsmlFallback && req.tools) {
     messages.push({
       role: "system",
       content: buildDsmlPrompt(req.tools),
     });
   }
 
-  // 4. Convert input items to messages
   if (Array.isArray(req.input)) {
     for (const inputItem of req.input) {
-      const itemMessages = inputItemToMessages(inputItem);
-      for (const m of itemMessages) {
+      for (const m of inputItemToMessages(inputItem)) {
         messages.push(m);
       }
     }
   }
 
-  return {
-    messages,
-    dsmlFallbackActive: needsDsmlFallback,
-  };
+  return { messages };
 }
 
-/**
- * Build the Chat Completions request body (partial) from a Responses API
- * request.
- */
 export function buildChatRequest(
-  req: any,
+  req: ResponsesApiRequest,
   resolvedModel: string,
-  messages: any[],
-): any {
-  // Streaming mode is determined by the caller based on Accept header
-  // Default to non-streaming; caller overrides as needed
+  messages: OpenAIMessage[],
+): OpenAIRequest {
   const shouldStream = req.stream === true;
-
-  const chatReq: any = {
+  const chatReq: OpenAIRequest = {
     model: resolvedModel,
     messages,
     stream: shouldStream,
@@ -393,15 +360,11 @@ export function buildChatRequest(
     chatReq.stream_options = { include_usage: true };
   }
 
-  // Convert tools
   if (Array.isArray(req.tools)) {
     const converted = convertTools(req.tools);
-    if (converted.length > 0) {
-      chatReq.tools = converted;
-    }
+    if (converted.length > 0) chatReq.tools = converted;
   }
 
-  // Forward supported parameters
   if (req.max_tokens !== undefined) chatReq.max_tokens = req.max_tokens;
   if (req.temperature !== undefined) chatReq.temperature = req.temperature;
   if (req.top_p !== undefined) chatReq.top_p = req.top_p;
@@ -409,16 +372,13 @@ export function buildChatRequest(
   return chatReq;
 }
 
-/**
- * Convert a Chat Completions response message into Responses API output items.
- */
-export function chatResponseToOutput(
-  message: any,
-): { output: any[]; hasToolCalls: boolean } {
-  const output: any[] = [];
+export function chatResponseToOutput(message: Partial<OpenAIMessage>): {
+  output: ResponsesOutputItem[];
+} {
+  const output: ResponsesOutputItem[] = [];
+  const textContent =
+    typeof message.content === "string" ? message.content : "";
 
-  // Text content → message output
-  const textContent = message.content || "";
   if (textContent) {
     output.push({
       id: "out_" + Date.now(),
@@ -428,29 +388,20 @@ export function chatResponseToOutput(
     });
   }
 
-  // Tool calls → function_call output items
-  const toolCalls = message.tool_calls;
-  let hasToolCalls = false;
-  if (Array.isArray(toolCalls)) {
-    hasToolCalls = toolCalls.length > 0;
-    for (const tc of toolCalls) {
+  if (message.tool_calls) {
+    for (const tc of message.tool_calls) {
       const callId = tc.id || `call_${Date.now()}`;
-      const argsStr =
-        typeof tc.function?.arguments === "string"
-          ? tc.function.arguments
-          : "{}";
       output.push({
         id: `item_${callId}`,
         type: "function_call",
         name: tc.function?.name || "",
         call_id: callId,
-        arguments: argsStr,
+        arguments: tc.function?.arguments || "{}",
         status: "completed",
       });
     }
   }
 
-  // Fallback: empty output
   if (output.length === 0) {
     output.push({
       id: "out_" + Date.now(),
@@ -460,21 +411,20 @@ export function chatResponseToOutput(
     });
   }
 
-  return { output, hasToolCalls };
+  return { output };
 }
 
-/**
- * Extract usage from a Chat Completions response into Responses API format.
- */
-export function extractUsage(chatRes: any): Record<string, number> {
-  const u = chatRes.usage || {};
-  const promptTokens = u.prompt_tokens || u.input_tokens || 0;
-  const completionTokens = u.completion_tokens || u.output_tokens || 0;
-  const totalTokens = u.total_tokens || promptTokens + completionTokens;
+export function extractUsage(chatRes: {
+  usage?: Partial<OpenAIUsage>;
+}): ResponsesApiUsage {
+  const u = chatRes.usage;
+  const promptTokens = u?.prompt_tokens || u?.input_tokens || 0;
+  const completionTokens = u?.completion_tokens || u?.output_tokens || 0;
+  const totalTokens = u?.total_tokens || promptTokens + completionTokens;
   const cachedRead =
-    u.cache_read_input_tokens ||
-    u.prompt_tokens_details?.cached_tokens ||
-    u.input_tokens_details?.cached_tokens ||
+    u?.cache_read_input_tokens ||
+    u?.prompt_tokens_details?.cached_tokens ||
+    u?.input_tokens_details?.cached_tokens ||
     0;
 
   return {

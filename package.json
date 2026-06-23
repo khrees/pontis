@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "npx wrangler dev",
     "deploy": "npx wrangler deploy",
+    "build": "npm run build:proxy",
     "build:proxy": "esbuild src/local-server.ts --bundle --platform=node --target=node18 --outfile=dist/proxy.js",
     "test": "vitest run",
     "test:watch": "vitest"

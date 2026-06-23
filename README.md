@@ -109,10 +109,13 @@ You can fully automate Pontis and bypass interactive prompt configuration by set
 | Variable | Description | Example |
 |---|---|---|
 | `PONTIS_PROVIDER` | Define provider preset (`opencode` or `local`) | `export PONTIS_PROVIDER="local"` |
+| `PONTIS_MODEL` | Default free model for remapping and Codex launcher | `export PONTIS_MODEL="deepseek-v4-flash-free"` |
 | `PONTIS_UPSTREAM_URL` | Upstream base URL targeting the model engine | `export PONTIS_UPSTREAM_URL="http://localhost:11434/v1"` |
 | `PONTIS_UPSTREAM_FORMAT` | Upstream API format (`openai`, `anthropic`, or `openai-completions`) | `export PONTIS_UPSTREAM_FORMAT="openai"` |
 | `OPENCODE_API_KEY` | OpenCode API credential | `export OPENCODE_API_KEY="sk-..."` |
 | `LOCAL_API_KEY` | Key for local setups (if authentication is required) | `export LOCAL_API_KEY="sk-local-test"` |
+| `PONTIS_DEBUG` | Enable verbose proxy request logging | `export PONTIS_DEBUG=true` |
+| `PONTIS_CODEX_MODE` | Return Codex-format model metadata from `/v1/models` | `export PONTIS_CODEX_MODE=true` |
 
 ---
 
