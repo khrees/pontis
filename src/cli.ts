@@ -21,7 +21,12 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const __CLI_DIR = dirname(fileURLToPath(import.meta.url));
+// In dev mode (tsx running src/cli.ts), ROOT is the project root (parent of src/).
+// In installed/bundled mode (node running dist/cli.js or ~/.local/bin/cli.js), ROOT is the script's own directory.
+const ROOT = existsSync(join(dirname(__CLI_DIR), "package.json"))
+  ? dirname(__CLI_DIR)
+  : __CLI_DIR;
 
 function getVersion(): string {
   try {
@@ -584,11 +589,24 @@ function buildProxy() {
 }
 
 function findNativeBinary(): string | null {
+  // Search order: project layout paths, then sibling of the CLI script (installed layout).
   for (const p of [
     join(ROOT, "bin", "pontis-proxy"),
     join(ROOT, "pontis-proxy"),
+    join(__CLI_DIR, "pontis-proxy"),
   ]) {
     if (existsSync(p)) return p;
+  }
+  // In installed mode only (no source tree), check if pontis-proxy is on PATH.
+  // Skip this in dev mode to avoid shadowing the local dist/proxy.js with a
+  // stale system-wide binary.
+  if (!existsSync(SRC_DIR)) {
+    try {
+      const resolved = execSync("which pontis-proxy 2>/dev/null || true")
+        .toString()
+        .trim();
+      if (resolved && existsSync(resolved)) return resolved;
+    } catch {}
   }
   return null;
 }
