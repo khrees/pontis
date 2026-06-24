@@ -21,6 +21,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 
+import pkg from "../package.json";
+
 const __CLI_DIR = dirname(fileURLToPath(import.meta.url));
 // In dev mode (tsx running src/cli.ts), ROOT is the project root (parent of src/).
 // In installed/bundled mode (node running dist/cli.js or ~/.local/bin/cli.js), ROOT is the script's own directory.
@@ -29,12 +31,7 @@ const ROOT = existsSync(join(dirname(__CLI_DIR), "package.json"))
   : __CLI_DIR;
 
 function getVersion(): string {
-  try {
-    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));
-    return pkg.version || "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
+  return pkg.version || "0.0.0";
 }
 
 const VERSION = getVersion();
