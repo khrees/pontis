@@ -73,16 +73,19 @@ fi
 # Create install dir
 mkdir -p "$INSTALL_DIR"
 
-# Get latest release tag name
-info "Checking latest release on GitHub..."
-RELEASE_INFO=$(curl -s https://api.github.com/repos/$REPO/releases/latest || echo "")
-TAG_NAME=$(echo "$RELEASE_INFO" | grep -o '"tag_name": "[^"]*' | grep -o '[^"]*$' || echo "")
-
-if [ -z "$TAG_NAME" ]; then
-  error "Failed to retrieve latest release version from GitHub API. Please check your internet connection."
+# Get release tag name (allow override via PONTIS_VERSION env var)
+if [ -n "$PONTIS_VERSION" ]; then
+  TAG_NAME="$PONTIS_VERSION"
+  info "Using specified version: $TAG_NAME"
+else
+  info "Checking latest release on GitHub..."
+  RELEASE_INFO=$(curl -s https://api.github.com/repos/$REPO/releases/latest || echo "")
+  TAG_NAME=$(echo "$RELEASE_INFO" | grep -o '"tag_name": "[^"]*' | grep -o '[^"]*$' || echo "")
+  if [ -z "$TAG_NAME" ]; then
+    error "Failed to retrieve latest release version from GitHub API. Please check your internet connection."
+  fi
+  info "Latest version found: $TAG_NAME"
 fi
-
-info "Latest version found: $TAG_NAME"
 
 # Download launcher script to temp file
 LAUNCHER_URL="https://github.com/$REPO/releases/download/$TAG_NAME/pontis"
@@ -138,6 +141,14 @@ if curl -fsSL "$CHECKSUM_URL" -o "$TMP_CHECKSUMS" 2>/dev/null; then
 else
   warn "Checksums not available for this release — skipping verification"
   rm -f "$TMP_CHECKSUMS"
+fi
+
+# Code-sign the binary on macOS to prevent Gatekeeper from killing it (exit code 137)
+if [ "$OS" = "darwin" ]; then
+  if command -v codesign &>/dev/null; then
+    info "Signing macOS binary..."
+    codesign -s - --force "$TMP_BINARY" || warn "Failed to code-sign binary"
+  fi
 fi
 
 # Remove previous Pontis install artifacts (handles renames across versions)
