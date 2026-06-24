@@ -140,6 +140,19 @@ else
   rm -f "$TMP_CHECKSUMS"
 fi
 
+# Remove previous Pontis install artifacts (handles renames across versions)
+info "Cleaning previous install..."
+PONTIS_OLD_FILES="pontis pontis-proxy cli.js cli.mjs"
+for f in $PONTIS_OLD_FILES; do
+  if [ -f "$INSTALL_DIR/$f" ]; then
+    if [ -w "$INSTALL_DIR/$f" ]; then
+      rm -f "$INSTALL_DIR/$f"
+    else
+      sudo rm -f "$INSTALL_DIR/$f"
+    fi
+  fi
+done
+
 # Install launcher, CLI bundle, and proxy binary to destination
 info "Installing to $INSTALL_DIR..."
 if [ -w "$INSTALL_DIR" ]; then
