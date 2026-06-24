@@ -554,6 +554,7 @@ function onShutdown(handler: () => void) {
 // ══════════════════════════════════════════════════════════════
 
 function needsProxyRebuild(): boolean {
+  if (!existsSync(SRC_DIR)) return false;
   if (!existsSync(DIST_PROXY)) return true;
   try {
     const distMtime = statSync(DIST_PROXY).mtimeMs;
