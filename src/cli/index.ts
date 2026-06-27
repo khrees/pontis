@@ -26,6 +26,7 @@ import {
   t,
   SYM,
   VERSION,
+  createSpinner,
 } from "./ui";
 import { cmdUpdateKey, fetchWorkingOpenCodeModels } from "./provider-opencode";
 import { fetchLocalModels } from "./provider-local";
@@ -136,24 +137,7 @@ program
         }
         const spin = jsonMode
           ? null
-          : new (class {
-              message = "Fetching models from Cloudflare...";
-              isDone = false;
-              frame = 0;
-              interval = setInterval(() => {
-                this.frame = (this.frame + 1) % SYM.spinner.length;
-                if (!this.isDone)
-                  process.stdout.write(
-                    `\r  ${t.muted(SYM.spinner[this.frame])}  ${this.message}`,
-                  );
-              }, 80);
-              stop(result: { type: "success" | "warning"; text: string }) {
-                this.isDone = true;
-                clearInterval(this.interval);
-                process.stdout.write("\r\x1b[K");
-                badge(result.type, result.text);
-              }
-            })();
+          : createSpinner("Fetching models from Cloudflare...");
         const models = await fetchCloudflareModels(accountId, apiToken);
         if (spin) {
           spin.stop(
@@ -198,24 +182,7 @@ program
         }
         const spin = jsonMode
           ? null
-          : new (class {
-              message = "Fetching models from OpenCode...";
-              isDone = false;
-              frame = 0;
-              interval = setInterval(() => {
-                this.frame = (this.frame + 1) % SYM.spinner.length;
-                if (!this.isDone)
-                  process.stdout.write(
-                    `\r  ${t.muted(SYM.spinner[this.frame])}  ${this.message}`,
-                  );
-              }, 80);
-              stop(result: { type: "success" | "warning"; text: string }) {
-                this.isDone = true;
-                clearInterval(this.interval);
-                process.stdout.write("\r\x1b[K");
-                badge(result.type, result.text);
-              }
-            })();
+          : createSpinner("Fetching models from OpenCode...");
         const models = await fetchWorkingOpenCodeModels(apiKey);
         if (spin)
           spin.stop(
@@ -255,24 +222,7 @@ program
           process.env.LOCAL_API_KEY || process.env.OPENAI_API_KEY || "";
         const spin = jsonMode
           ? null
-          : new (class {
-              message = `Scanning models at ${upstreamUrl}...`;
-              isDone = false;
-              frame = 0;
-              interval = setInterval(() => {
-                this.frame = (this.frame + 1) % SYM.spinner.length;
-                if (!this.isDone)
-                  process.stdout.write(
-                    `\r  ${t.muted(SYM.spinner[this.frame])}  ${this.message}`,
-                  );
-              }, 80);
-              stop(result: { type: "success" | "warning"; text: string }) {
-                this.isDone = true;
-                clearInterval(this.interval);
-                process.stdout.write("\r\x1b[K");
-                badge(result.type, result.text);
-              }
-            })();
+          : createSpinner(`Scanning models at ${upstreamUrl}...`);
         const models = await fetchLocalModels(upstreamUrl, apiKey);
         if (spin)
           spin.stop(
