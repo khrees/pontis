@@ -7,6 +7,14 @@ export const ZEN_UPSTREAM = "https://opencode.ai/zen/v1";
 export const DEFAULT_UPSTREAM = GO_UPSTREAM;
 export const VISION_MODEL = "qwen3.6-plus";
 
+export function getVisionModel(): string {
+  const provider = process?.env?.PONTIS_PROVIDER?.toLowerCase();
+  if (provider === "cloudflare") {
+    return "@cf/meta/llama-3.2-11b-vision-instruct";
+  }
+  return VISION_MODEL;
+}
+
 const API_START_PATHS = new Set(["v1", "v2"]);
 
 const KNOWN_OPENCODE_PREFIXES = [
@@ -47,6 +55,10 @@ export type RouteConfig = {
 };
 
 export function getDefaultFreeModel(): string {
+  const provider = process?.env?.PONTIS_PROVIDER?.toLowerCase();
+  if (provider === "cloudflare") {
+    return process?.env?.PONTIS_MODEL || "@cf/moonshotai/kimi-k2.6";
+  }
   return process?.env?.PONTIS_MODEL || "mimo-v2.5-free";
 }
 
@@ -55,6 +67,10 @@ export function resolveModel(model: string): string {
   if (!model) return defaultFreeModel;
 
   const lower = model.toLowerCase();
+  if (lower.startsWith("@cf/")) {
+    return model;
+  }
+
   if (PAID_TO_FREE[lower]) return PAID_TO_FREE[lower];
 
   for (const [prefix, freeModel] of PREFIX_TO_FREE) {
@@ -194,7 +210,7 @@ export function requestHasImages(messages: { content?: unknown }[] | undefined):
   );
 }
 
-/** Resolve model + upstream + auth for a request, applying vision fallback for OpenCode. */
+/** Resolve model + upstream + auth for a request, applying vision fallback for OpenCode or Cloudflare. */
 export function resolveModelAndUpstream(
   request: Request,
   routeUpstream: string,
@@ -204,15 +220,19 @@ export function resolveModelAndUpstream(
   const key = extractApiKey(request.headers);
   let resolvedModel = model;
   const baseUpstream = getUpstream(routeUpstream);
+  const provider = process?.env?.PONTIS_PROVIDER?.toLowerCase();
 
-  if (baseUpstream.includes("opencode.ai")) {
+  const isOpencode = baseUpstream.includes("opencode.ai") || provider === "opencode";
+  const isCloudflare = baseUpstream.includes("gateway.ai.cloudflare.com") || provider === "cloudflare";
+
+  if (isOpencode || isCloudflare) {
     resolvedModel = resolveModel(resolvedModel);
     if (options?.hasVision) {
-      resolvedModel = VISION_MODEL;
+      resolvedModel = getVisionModel();
     }
   }
 
   const upstream = selectUpstream(request, routeUpstream, resolvedModel);
-  const authErr = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
+  const authErr = (isOpencode || isCloudflare) ? validateApiKey(key) : null;
   return { model: resolvedModel, upstream, authErr };
 }
