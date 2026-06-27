@@ -55,6 +55,81 @@ export const KNOWN_MODEL_METADATA: Record<string, Partial<ModelMetadata>> = {
     context_window: 131072,
     max_output_tokens: 8192,
   },
+  "@cf/meta/llama-3-8b-instruct": {
+    context_window: 8192,
+    max_output_tokens: 2048,
+  },
+  "@cf/meta/llama-3.1-8b-instruct": {
+    context_window: 131072,
+    max_output_tokens: 8192,
+  },
+  "@cf/meta/llama-3.2-1b-instruct": {
+    context_window: 131072,
+    max_output_tokens: 4096,
+  },
+  "@cf/meta/llama-3.2-3b-instruct": {
+    context_window: 131072,
+    max_output_tokens: 4096,
+  },
+  "@cf/meta/llama-3.2-11b-vision-instruct": {
+    context_window: 131072,
+    max_output_tokens: 8192,
+  },
+  "@cf/qwen/qwen1.5-14b-chat-awq": {
+    context_window: 32768,
+    max_output_tokens: 4096,
+  },
+  "@cf/qwen/qwen2.5-coder-32b-instruct": {
+    context_window: 32768,
+    max_output_tokens: 8192,
+  },
+  "@cf/qwen/qwq-32b": {
+    context_window: 32768,
+    max_output_tokens: 8192,
+    supports_reasoning: true,
+  },
+  "@cf/moonshotai/kimi-k2.6": {
+    context_window: 262144,
+    max_output_tokens: 8192,
+    supports_reasoning: true,
+  },
+  "@cf/moonshotai/kimi-k2.7": {
+    context_window: 262144,
+    max_output_tokens: 8192,
+    supports_reasoning: true,
+  },
+  "@cf/moonshotai/kimi-k2.7-code": {
+    context_window: 262144,
+    max_output_tokens: 8192,
+    supports_reasoning: true,
+  },
+  "@cf/zai-org/glm-4.7-flash": {
+    context_window: 131072,
+    max_output_tokens: 8192,
+  },
+  "@cf/zai-org/glm-5.2": {
+    context_window: 262144,
+    max_output_tokens: 8192,
+    supports_reasoning: true,
+  },
+  "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": {
+    context_window: 131072,
+    max_output_tokens: 8192,
+    supports_reasoning: true,
+  },
+  "@cf/deepseek-ai/deepseek-r1-distill-llama-8b": {
+    context_window: 131072,
+    max_output_tokens: 8192,
+    supports_reasoning: true,
+  },
+  "@cf/qwen/qwen2.5-7b-instruct": {
+    context_window: 131072,
+    max_output_tokens: 8192,
+  },
+  "@cf/qwen/qwen2.5-14b-instruct": {
+    context_window: 131072,
+    max_output_tokens: 8192,
+  },
 };
 
 export function getModelMetadata(modelId: string): ModelMetadata {

@@ -5,14 +5,14 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [ -f "$SCRIPT_DIR/src/cli.ts" ]; then
+if [ -f "$SCRIPT_DIR/src/cli/index.ts" ]; then
   # Dev mode — TypeScript source is available
-  exec npx --yes tsx "$SCRIPT_DIR/src/cli.ts" "$@"
+  exec npx --yes tsx "$SCRIPT_DIR/src/cli/index.ts" "$@"
 elif [ -f "$SCRIPT_DIR/cli.mjs" ]; then
   # Installed mode — bundled ESM JS sits alongside this launcher
   exec node "$SCRIPT_DIR/cli.mjs" "$@"
 else
   echo "Error: Cannot find Pontis CLI bundle." >&2
-  echo "Expected either $SCRIPT_DIR/src/cli.ts (dev) or $SCRIPT_DIR/cli.mjs (installed)." >&2
+  echo "Expected either $SCRIPT_DIR/src/cli/index.ts (dev) or $SCRIPT_DIR/cli.mjs (installed)." >&2
   exit 1
 fi

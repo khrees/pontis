@@ -7,7 +7,7 @@
     "deploy": "npx wrangler deploy",
     "build": "npm run build:proxy && npm run build:cli",
     "build:proxy": "esbuild src/local-server.ts --bundle --platform=node --target=node18 --outfile=dist/proxy.js",
-    "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/cli.mjs",
+    "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/cli.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
