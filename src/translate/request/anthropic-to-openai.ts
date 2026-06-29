@@ -8,6 +8,14 @@ import {
   OpenAIContentPart,
   OpenAIToolCall
 } from '../../types';
+import {
+  isAnthropicTextBlock,
+  isAnthropicImageBlock,
+  isAnthropicToolUseBlock,
+  isAnthropicThinkingBlock,
+  isString,
+  isObject,
+} from '../../type-guards';
 
 const SAFE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"]);
 
@@ -64,11 +72,11 @@ export function formatAnthropicToOpenAI(body: AnthropicRequest): OpenAIRequest {
           const toolCalls: OpenAIToolCall[] = [];
 
           (msg.content as AnthropicContentBlock[]).forEach((part) => {
-            if (part.type === "text") {
-              text += (typeof part.text === "string" ? part.text : JSON.stringify(part.text));
-            } else if (part.type === "thinking") {
-              reasoningContent += (typeof part.thinking === "string" ? part.thinking : JSON.stringify(part.thinking));
-            } else if (part.type === "tool_use") {
+            if (isAnthropicTextBlock(part)) {
+              text += part.text;
+            } else if (isAnthropicThinkingBlock(part)) {
+              reasoningContent += part.thinking;
+            } else if (isAnthropicToolUseBlock(part)) {
               toolCalls.push({
                 id: part.id,
                 type: "function",
@@ -94,16 +102,17 @@ export function formatAnthropicToOpenAI(body: AnthropicRequest): OpenAIRequest {
           const toolResults: OpenAIMessage[] = [];
 
           (msg.content as AnthropicContentBlock[]).forEach((part) => {
-            if (part.type === "text") {
-              userText += (typeof part.text === "string" ? part.text : JSON.stringify(part.text));
-            } else if (part.type === "image") {
+            if (isAnthropicTextBlock(part)) {
+              userText += part.text;
+            } else if (isAnthropicImageBlock(part)) {
               const translated = translateImageBlock(part);
               if (translated) contentParts.push(translated);
             } else if (part.type === "tool_result") {
+              const content = isString(part.content) ? part.content : JSON.stringify(part.content);
               toolResults.push({
                 role: "tool",
                 tool_call_id: part.tool_use_id,
-                content: typeof part.content === "string" ? part.content : JSON.stringify(part.content),
+                content,
               });
             }
           });

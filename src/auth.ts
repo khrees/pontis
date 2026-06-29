@@ -7,6 +7,8 @@ declare const process: { env?: Record<string, string | undefined> };
  * Defaults to 32 for OpenCode. Set to 0 to disable length checks (local models).
  */
 
+import { InvalidApiKeyError, ApiKeyLengthError, errorToResponse } from "./errors";
+
 export function getMinKeyLength(): number {
   const val = process?.env?.PONTIS_MIN_KEY_LENGTH;
   if (val === undefined || val === "") return 32;
@@ -22,31 +24,17 @@ export function extractApiKey(headers: Headers | Record<string, string | null>):
   return get("X-Api-Key") || get("Authorization")?.replace("Bearer ", "")?.trim() || null;
 }
 
-export interface AuthError {
-  status: number;
-  body: Record<string, unknown>;
-}
-
-export function validateApiKey(key: string | null): AuthError | null {
+export function validateApiKey(key: string | null): null | never {
   if (!key) {
-    return {
-      status: 401,
-      body: { error: { type: "authentication_error", message: "Missing API key. Provide x-api-key header." } },
-    };
+    throw new InvalidApiKeyError("Missing API key. Provide x-api-key header.");
   }
   const minLength = getMinKeyLength();
   if (minLength > 0 && key.length < minLength) {
-    return {
-      status: 401,
-      body: { error: { type: "authentication_error", message: `API key is too short. Must be at least ${minLength} characters.` } },
-    };
+    throw new ApiKeyLengthError(minLength, key.length);
   }
   return null;
 }
 
-export function authErrorResponse(err: AuthError): Response {
-  return new Response(JSON.stringify(err.body), {
-    status: err.status,
-    headers: { "Content-Type": "application/json" },
-  });
+export function authErrorResponse(error: unknown, requestId?: string): Response {
+  return errorToResponse(error, requestId);
 }
