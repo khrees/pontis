@@ -5,15 +5,15 @@
  */
 
 import { Command } from "commander";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { runInteractiveWizard, runWithConfig } from "./wizard";
 import {
-  KEY_FILE,
   CLOUDFLARE_CONFIG_FILE,
   PROXY_LOG,
   FALLBACK_MODELS,
   CLOUDFLARE_FALLBACK_MODELS,
   getCloudflareConfigSaved,
+  getOpenCodeApiKey,
   type PontisEnv,
 } from "./config";
 import {
@@ -165,9 +165,7 @@ program
           for (const m of models) kv("Model", t.primary(m));
         }
       } else if (provider === "opencode") {
-        const apiKey =
-          process.env.OPENCODE_API_KEY ||
-          (existsSync(KEY_FILE) ? readFileSync(KEY_FILE, "utf-8").trim() : "");
+        const apiKey = getOpenCodeApiKey() || "";
         if (!apiKey) {
           if (jsonMode)
             outputJsonError(
@@ -289,7 +287,7 @@ program
       const keyExists =
         provider === "cloudflare"
           ? existsSync(CLOUDFLARE_CONFIG_FILE)
-          : existsSync(KEY_FILE);
+          : getOpenCodeApiKey() !== null;
 
       if (jsonMode) {
         outputJson({

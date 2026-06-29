@@ -1,20 +1,14 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { select, input, confirm, createSpinner, badge, section, splash } from "./ui";
-import { KEY_FILE, CACHE_FILE, FALLBACK_MODELS, getOpenCodeApiKey } from "./config";
+import { CACHE_FILE, FALLBACK_MODELS, getOpenCodeApiKey } from "./config";
 import { storeOpenCodeApiKey } from "../secure-storage";
 
 export async function getOpenCodeApiKeyInteractive(): Promise<string> {
   if (process.env.OPENCODE_API_KEY) return process.env.OPENCODE_API_KEY;
-  
-  // Check secure storage first
+
+  // Check secure storage (also handles legacy file migration)
   const secureKey = getOpenCodeApiKey();
   if (secureKey) return secureKey;
-  
-  // Fall back to legacy file
-  if (existsSync(KEY_FILE)) {
-    const saved = readFileSync(KEY_FILE, "utf-8").trim().replace(/\r/g, "");
-    if (saved) return saved;
-  }
 
   section("OpenCode API Key");
   console.log(
