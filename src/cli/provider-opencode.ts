@@ -1,9 +1,16 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { select, input, confirm, createSpinner, badge, section, splash } from "./ui";
-import { KEY_FILE, CACHE_FILE, FALLBACK_MODELS } from "./config";
+import { KEY_FILE, CACHE_FILE, FALLBACK_MODELS, getOpenCodeApiKey } from "./config";
+import { storeOpenCodeApiKey } from "../secure-storage";
 
 export async function getOpenCodeApiKeyInteractive(): Promise<string> {
   if (process.env.OPENCODE_API_KEY) return process.env.OPENCODE_API_KEY;
+  
+  // Check secure storage first
+  const secureKey = getOpenCodeApiKey();
+  if (secureKey) return secureKey;
+  
+  // Fall back to legacy file
   if (existsSync(KEY_FILE)) {
     const saved = readFileSync(KEY_FILE, "utf-8").trim().replace(/\r/g, "");
     if (saved) return saved;
@@ -20,8 +27,8 @@ export async function getOpenCodeApiKeyInteractive(): Promise<string> {
   }
   const save = await confirm("Save this key for future use?", true);
   if (save) {
-    writeFileSync(KEY_FILE, key.trim(), { encoding: "utf-8", mode: 0o600 });
-    badge("success", "Key saved to " + KEY_FILE);
+    storeOpenCodeApiKey(key.trim());
+    badge("success", "Key saved securely");
   }
   return key.trim();
 }
@@ -144,6 +151,6 @@ export async function cmdUpdateKey(keyArg?: string) {
     badge("error", "API key is required.");
     process.exit(1);
   }
-  writeFileSync(KEY_FILE, apiKey.trim(), { encoding: "utf-8", mode: 0o600 });
-  badge("success", `Saved to ${KEY_FILE}`);
+  storeOpenCodeApiKey(apiKey.trim());
+  badge("success", "Key saved securely");
 }

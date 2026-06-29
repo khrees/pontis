@@ -8,8 +8,11 @@ import {
 } from '../types';
 import { extractCachedTokens, extractOutputTokens, extractUncachedInputTokens, extractInputTokens } from '../cache';
 import { warnLog } from '../logger';
+import { StreamBufferOverflowError, StreamParseError } from '../errors';
+import { getTextEncoder, getTextDecoder, getOptimalBufferConfig } from '../stream-utils';
 
-const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB
+const BUFFER_CONFIG = getOptimalBufferConfig();
+const MAX_BUFFER_SIZE = BUFFER_CONFIG.maxSize;
 
 // ==========================================
 // OpenAI Legacy Completion <-> OpenAI Chat
@@ -62,14 +65,18 @@ export function formatOpenAIChatToOpenAICompletion(response: OpenAIResponse, mod
 
 export function streamOpenAIChatToOpenAICompletion(chatStream: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> {
   const fallbackId = "cmpl-" + Math.floor(Date.now() / 1000);
+  const encoder = getTextEncoder();
+  const decoder = getTextDecoder();
+  
   const enqueueSSE = (controller: ReadableStreamDefaultController<Uint8Array>, data: unknown) => {
-    controller.enqueue(new TextEncoder().encode(`data: ${typeof data === "string" ? data : JSON.stringify(data)}\n\n`));
+    controller.enqueue(encoder.encode(`data: ${typeof data === "string" ? data : JSON.stringify(data)}\n\n`));
   };
+  
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       const reader = chatStream.getReader();
-      const decoder = new TextDecoder();
       let buffer = "";
+      
       function processEvents(lines: string[]) {
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
@@ -81,8 +88,7 @@ export function streamOpenAIChatToOpenAICompletion(chatStream: ReadableStream<Ui
           }
           let parsed: any;
           try { parsed = JSON.parse(raw); } catch (e) {
-            warnLog(`[Completions→Chat stream] Failed to parse SSE event: ${e}`);
-            continue;
+            throw new StreamParseError(raw, e instanceof Error ? e : new Error(String(e)));
           }
           const delta = parsed.choices?.[0]?.delta;
           const text = delta?.content || delta?.reasoning_content || "";
@@ -97,6 +103,7 @@ export function streamOpenAIChatToOpenAICompletion(chatStream: ReadableStream<Ui
           enqueueSSE(controller, completionChunk);
         }
       }
+      
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -104,10 +111,8 @@ export function streamOpenAIChatToOpenAICompletion(chatStream: ReadableStream<Ui
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
           if (buffer.length > MAX_BUFFER_SIZE) {
-            warnLog('[stream] Buffer exceeded maximum size, aborting');
-            controller.error(new Error('Stream buffer overflow'));
             reader.releaseLock();
-            return;
+            throw new StreamBufferOverflowError(buffer.length, MAX_BUFFER_SIZE);
           }
           const parts = buffer.split("\n\n");
           buffer = parts.pop() || "";
@@ -230,14 +235,18 @@ export function formatOpenAICompletionToAnthropicResponse(completion: OpenAIComp
 
 export function streamAnthropicToOpenAICompletion(anthropicStream: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> {
   const chatId = "cmpl-" + Math.floor(Date.now() / 1000);
+  const encoder = getTextEncoder();
+  const decoder = getTextDecoder();
+  
   const enqueueSSE = (controller: ReadableStreamDefaultController<Uint8Array>, data: unknown) => {
-    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`));
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
   };
+  
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       const reader = anthropicStream.getReader();
-      const decoder = new TextDecoder();
       let buffer = "";
+      
       function processEvents(lines: string[]) {
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
@@ -245,8 +254,7 @@ export function streamAnthropicToOpenAICompletion(anthropicStream: ReadableStrea
           if (!raw) continue;
           let evt: any;
           try { evt = JSON.parse(raw); } catch (e) {
-            warnLog(`[Chat→Completion stream] Failed to parse SSE event: ${e}`);
-            continue;
+            throw new StreamParseError(raw, e instanceof Error ? e : new Error(String(e)));
           }
           switch (evt.type) {
             case "content_block_delta": {
@@ -265,6 +273,7 @@ export function streamAnthropicToOpenAICompletion(anthropicStream: ReadableStrea
           }
         }
       }
+      
       function emitChunk(text: string, finishReason?: string) {
         const chunk = {
           id: chatId,
@@ -275,6 +284,7 @@ export function streamAnthropicToOpenAICompletion(anthropicStream: ReadableStrea
         };
         enqueueSSE(controller, chunk);
       }
+      
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -282,10 +292,8 @@ export function streamAnthropicToOpenAICompletion(anthropicStream: ReadableStrea
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
           if (buffer.length > MAX_BUFFER_SIZE) {
-            warnLog('[stream] Buffer exceeded maximum size, aborting');
-            controller.error(new Error('Stream buffer overflow'));
             reader.releaseLock();
-            return;
+            throw new StreamBufferOverflowError(buffer.length, MAX_BUFFER_SIZE);
           }
           const parts = buffer.split("\n\n");
           buffer = parts.pop() || "";
@@ -305,9 +313,13 @@ export function streamAnthropicToOpenAICompletion(anthropicStream: ReadableStrea
 
 export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> {
   const messageId = "msg_" + Date.now();
+  const encoder = getTextEncoder();
+  const decoder = getTextDecoder();
+  
   const enqueueSSE = (controller: ReadableStreamDefaultController<Uint8Array>, eventType: string, data: unknown) => {
-    controller.enqueue(new TextEncoder().encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
+    controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
   };
+  
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       const contentBlockIndex = 0;
@@ -316,8 +328,8 @@ export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<U
       let finishReason: string | null = null;
       let messageStarted = false;
       const reader = openaiStream.getReader();
-      const decoder = new TextDecoder();
       let buffer = '';
+      
       function processStreamDelta(text: string, parsed: any) {
         if (parsed.usage) {
           lastUsage = {
@@ -362,6 +374,7 @@ export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<U
           });
         }
       }
+      
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -377,7 +390,7 @@ export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<U
                     const text = parsed.choices?.[0]?.text;
                     if (text !== undefined) processStreamDelta(text, parsed);
                   } catch (e) {
-                warnLog(`[Completion stream] Failed to parse SSE chunk: ${e}`);
+                    throw new StreamParseError(data, e instanceof Error ? e : new Error(String(e)));
               }
                 }
               }
@@ -387,10 +400,8 @@ export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<U
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
           if (buffer.length > MAX_BUFFER_SIZE) {
-            warnLog('[stream] Buffer exceeded maximum size, aborting');
-            controller.error(new Error('Stream buffer overflow'));
             reader.releaseLock();
-            return;
+            throw new StreamBufferOverflowError(buffer.length, MAX_BUFFER_SIZE);
           }
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
@@ -403,7 +414,7 @@ export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<U
                 const text = parsed.choices?.[0]?.text;
                 if (text !== undefined) processStreamDelta(text, parsed);
               } catch (e) {
-                warnLog(`[Completion stream] Failed to parse SSE chunk: ${e}`);
+                throw new StreamParseError(data, e instanceof Error ? e : new Error(String(e)));
               }
             }
           }

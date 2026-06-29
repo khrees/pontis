@@ -1,6 +1,12 @@
 declare const process: { env?: Record<string, string | undefined> };
 
 import { warnLog } from "./logger";
+import {
+  UpstreamTimeoutError,
+  UpstreamConnectionError,
+  errorToResponse,
+  UpstreamError,
+} from "./errors";
 
 export const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -57,6 +63,14 @@ export async function fetchWithTimeout(
 
   try {
     return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new UpstreamTimeoutError(timeoutMs);
+    }
+    throw new UpstreamConnectionError(
+      error instanceof Error ? error.message : "Unknown connection error"
+    );
   } finally {
     clearTimeout(timeoutId);
   }
@@ -82,44 +96,6 @@ export function openaiAuthHeaders(key: string | null): Record<string, string> {
     "Content-Type": "application/json",
     ...(key ? { Authorization: `Bearer ${key}` } : {}),
   };
-}
-
-export interface ProxyError {
-  proxy_error: {
-    type: string;
-    message: string;
-    request_id?: string;
-    upstream_status?: number;
-    upstream_body?: string;
-  };
-}
-
-function makeProxyError(
-  type: string,
-  message: string,
-  requestId?: string,
-  upstreamStatus?: number,
-  upstreamBody?: string,
-): ProxyError {
-  return {
-    proxy_error: {
-      type,
-      message,
-      ...(requestId ? { request_id: requestId } : {}),
-      ...(upstreamStatus ? { upstream_status: upstreamStatus } : {}),
-      ...(upstreamBody ? { upstream_body: upstreamBody } : {}),
-    },
-  };
-}
-
-/** Response for when the proxy itself fails (timeout, network error, etc.). */
-export function proxyErrorResponse(
-  type: string,
-  message: string,
-  opts?: { requestId?: string; upstreamStatus?: number; upstreamBody?: string; status?: number },
-): Response {
-  const status = opts?.status || 502;
-  return jsonResponse(makeProxyError(type, message, opts?.requestId, opts?.upstreamStatus, opts?.upstreamBody), status);
 }
 
 /** Pass through an upstream error response, preserving relevant headers. */
@@ -166,12 +142,8 @@ export async function wrapProxyRequest(
   try {
     return await handler();
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
-      warnLog(`[${reqId}] Upstream request timed out`);
-      return proxyErrorResponse("upstream_timeout", "Upstream did not respond in time", { requestId: reqId });
-    }
     warnLog(`[${reqId}] Request failed: ${err instanceof Error ? err.message : String(err)}`);
-    return proxyErrorResponse("proxy_error", err instanceof Error ? err.message : String(err), { requestId: reqId });
+    return errorToResponse(err, reqId);
   }
 }
 
