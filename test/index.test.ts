@@ -1007,4 +1007,97 @@ describe('worker routing', () => {
 
     vi.restoreAllMocks();
   });
+
+  it('remaps Claude models to default Cloudflare model when provider is cloudflare', async () => {
+    process.env.PONTIS_PROVIDER = 'cloudflare';
+    process.env.PONTIS_UPSTREAM_URL = 'https://gateway.ai.cloudflare.com/v1/acc/gw/workers-ai/v1';
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const request = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({ model: 'claude-3-5-sonnet', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+
+    await worker.fetch(request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://gateway.ai.cloudflare.com/v1/acc/gw/workers-ai/v1/chat/completions',
+      expect.objectContaining({
+        body: expect.stringContaining('"model":"@cf/moonshotai/kimi-k2.6"'),
+      }),
+    );
+    delete process.env.PONTIS_PROVIDER;
+  });
+
+  it('remaps vision requests to Cloudflare vision model when provider is cloudflare', async () => {
+    process.env.PONTIS_PROVIDER = 'cloudflare';
+    process.env.PONTIS_UPSTREAM_URL = 'https://gateway.ai.cloudflare.com/v1/acc/gw/workers-ai/v1';
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const request = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'claude-3-5-sonnet',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'what is this image?' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'abc' } }
+          ]
+        }]
+      }),
+    });
+
+    await worker.fetch(request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://gateway.ai.cloudflare.com/v1/acc/gw/workers-ai/v1/chat/completions',
+      expect.objectContaining({
+        body: expect.stringContaining('"model":"@cf/meta/llama-3.2-11b-vision-instruct"'),
+      }),
+    );
+    delete process.env.PONTIS_PROVIDER;
+  });
+
+  it('preserves native Cloudflare models when provider is cloudflare', async () => {
+    process.env.PONTIS_PROVIDER = 'cloudflare';
+    process.env.PONTIS_UPSTREAM_URL = 'https://gateway.ai.cloudflare.com/v1/acc/gw/workers-ai/v1';
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const request = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({ model: '@cf/qwen/qwen1.5-14b-chat-awq', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+
+    await worker.fetch(request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://gateway.ai.cloudflare.com/v1/acc/gw/workers-ai/v1/chat/completions',
+      expect.objectContaining({
+        body: expect.stringContaining('"model":"@cf/qwen/qwen1.5-14b-chat-awq"'),
+      }),
+    );
+    delete process.env.PONTIS_PROVIDER;
+  });
 });

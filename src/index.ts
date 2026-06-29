@@ -1,3 +1,4 @@
+import pkg from "../package.json";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { extractApiKey, authErrorResponse } from "./auth";
@@ -288,7 +289,7 @@ async function handleRequest(request: Request): Promise<Response> {
   return jsonResponse(
     {
       name: "pontis-proxy",
-      version: "1.0.0",
+      version: pkg.version,
       request_id: reqId,
       endpoints: {
         "/v1/messages": "Anthropic → upstream (translated when upstream is OpenAI)",
