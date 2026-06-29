@@ -2,6 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  retrieveOpenCodeApiKey,
+  retrieveCloudflareApiToken,
+  retrieveLocalApiKey,
+  migrateFromPlainText,
+  CREDENTIAL_KEYS,
+} from "../secure-storage";
 
 const __CLI_DIR = dirname(fileURLToPath(import.meta.url));
 // In dev mode (tsx running src/cli/index.ts), ROOT is the project root (parent of src/).
@@ -10,7 +17,8 @@ export const ROOT = existsSync(join(dirname(dirname(__CLI_DIR)), "package.json")
   ? dirname(dirname(__CLI_DIR))
   : dirname(__CLI_DIR);
 
-export const KEY_FILE = join(homedir(), ".opencode_api_key");
+// Legacy file paths (for migration)
+export const LEGACY_KEY_FILE = join(homedir(), ".opencode_api_key");
 export const CLOUDFLARE_CONFIG_FILE = join(homedir(), ".cloudflare_gateway_config");
 export const CACHE_FILE = join(homedir(), ".pontis_models_cache.json");
 export const DIST_PROXY = join(ROOT, "dist", "proxy.js");
@@ -86,6 +94,13 @@ export interface PontisEnv {
 }
 
 export function getCloudflareConfigSaved(): { apiToken?: string; accountId?: string; gatewayId?: string } {
+  // Try secure storage first
+  const secureApiToken = retrieveCloudflareApiToken();
+  if (secureApiToken) {
+    return { apiToken: secureApiToken };
+  }
+  
+  // Fall back to legacy file
   if (existsSync(CLOUDFLARE_CONFIG_FILE)) {
     try {
       return JSON.parse(readFileSync(CLOUDFLARE_CONFIG_FILE, "utf-8"));
@@ -95,9 +110,36 @@ export function getCloudflareConfigSaved(): { apiToken?: string; accountId?: str
 }
 
 export function getLocalApiKey(): string {
+  // Try secure storage first
+  const secureKey = retrieveLocalApiKey();
+  if (secureKey) {
+    return secureKey;
+  }
+  
+  // Fall back to environment variables
   return (
     process.env.LOCAL_API_KEY ||
     process.env.OPENAI_API_KEY ||
     "local-model-dummy-api-key-value-32-chars-long"
   );
+}
+
+// Function to get OpenCode API key with migration support
+export function getOpenCodeApiKey(): string | null {
+  // Try secure storage first
+  const secureKey = retrieveOpenCodeApiKey();
+  if (secureKey) {
+    return secureKey;
+  }
+  
+  // Try to migrate from legacy file
+  if (existsSync(LEGACY_KEY_FILE)) {
+    const migrated = migrateFromPlainText(LEGACY_KEY_FILE, CREDENTIAL_KEYS.OPENCODE_API_KEY);
+    if (migrated) {
+      return retrieveOpenCodeApiKey();
+    }
+  }
+  
+  // Fall back to environment variable
+  return process.env.OPENCODE_API_KEY || null;
 }
