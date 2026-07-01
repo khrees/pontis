@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { t, SYM, badge, kv, confirm, createSpinner, warn } from "./ui";
 import { PROXY_URL } from "./proxy-manager";
 import { PI_AGENT_DIR, PI_MODELS_FILE } from "./config";
+import {
+  isInstalled,
+  ensureClientInstalled,
+  type ClientName,
+} from "./install-engine";
 
 export function autoApproveClaudeKey(apiKey: string) {
   try {
@@ -39,66 +44,48 @@ export function autoApproveClaudeKey(apiKey: string) {
 }
 
 // ──────────────────────────────────────────────
-//  Pi coding agent helpers
+//  Generic install check (delegates to install-engine)
+// ──────────────────────────────────────────────
+
+/**
+ * Check if a client binary is on PATH.
+ * Lightweight wrapper so existing code doesn't need to change.
+ */
+export function clientBinaryExists(name: ClientName): boolean {
+  return isInstalled(name);
+}
+
+/**
+ * Ensure a client is installed before launching.
+ * If missing, prompts to install (unless --no-install).
+ */
+export async function ensureClientReady(
+  name: ClientName,
+  autoInstall?: boolean,
+): Promise<boolean> {
+  return ensureClientInstalled(name, {
+    autoInstall,
+    interactive: autoInstall !== false,
+  });
+}
+
+// ──────────────────────────────────────────────
+//  Pi-specific helpers (unchanged)
 // ──────────────────────────────────────────────
 
 const PI_PROVIDER_NAME = "pontis";
 
 /** Check if the `pi` binary is on PATH. */
 export function piBinaryExists(): boolean {
-  try {
-    execSync("which pi 2>/dev/null || command -v pi 2>/dev/null", {
-      stdio: "ignore",
-    });
-    return true;
-  } catch {
-    return false;
-  }
+  return isInstalled("pi");
 }
 
-/** Prompt the user to install Pi if missing. Returns true once installed. */
+/**
+ * Prompt the user to install Pi if missing. Returns true once installed.
+ * Delegates to the generic install engine for consistency.
+ */
 export async function ensurePiInstalled(): Promise<boolean> {
-  // Pi requires Node >= 22.19.0
-  const [major, minor] = process.versions.node.split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 19)) {
-    badge(
-      "warning",
-      `Pi requires Node >= 22.19.0 (current: ${process.versions.node})`,
-    );
-    return false;
-  }
-
-  if (piBinaryExists()) return true;
-
-  badge("warning", "Pi coding agent is not installed");
-  const ok = await confirm(
-    "Install Pi coding agent? (npm install -g @earendil-works/pi-coding-agent)",
-    true,
-  );
-  if (!ok) {
-    badge(
-      "muted",
-      "Install manually: npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
-    );
-    return false;
-  }
-
-  const spin = createSpinner("Installing Pi coding agent...");
-  try {
-    execSync("npm install -g --ignore-scripts @earendil-works/pi-coding-agent", {
-      stdio: "pipe",
-      timeout: 120_000,
-    });
-    spin.stop({ type: "success", text: "Pi coding agent installed" });
-    return piBinaryExists();
-  } catch {
-    spin.stop({ type: "error", text: "Failed to install Pi coding agent" });
-    badge(
-      "muted",
-      "Install manually: npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
-    );
-    return false;
-  }
+  return ensureClientReady("pi", true);
 }
 
 export const PI_SETTINGS_FILE = join(PI_AGENT_DIR, "settings.json");
@@ -124,10 +111,6 @@ export function setupPiProvider(apiKey: string, model?: string): void {
     }
   }
 
-  // The model the user selected — Pi needs at least one model definition
-  // for the custom provider so the model resolver registers it in its
-  // provider map. Once the provider is known, buildFallbackModel() can
-  // synthesise any additional model IDs on the fly.
   const selectedModel = model ?? "default-model";
   const merged = {
     ...existing,
@@ -201,6 +184,31 @@ export function cleanupPiProvider(): void {
   }
 }
 
+/**
+ * Resolve a client binary path. Checks PATH first, then
+ * falls back to ~/.pontis/clients/<name>/bin/<binary> for
+ * Pontis-managed installations.
+ */
+function resolveClientBinary(name: ClientName): string {
+  // If on PATH, use it (honor existing installations)
+  try {
+    const resolved = execSync(`which "${name}" 2>/dev/null || command -v "${name}" 2>/dev/null`)
+      .toString()
+      .trim();
+    if (resolved) return resolved;
+  } catch {
+    // not found
+  }
+  // Fallback: Pontis-managed install under ~/.pontis/clients
+  const local = join(homedir(), ".pontis", "clients", name, "bin", name);
+  if (existsSync(local)) return local;
+  // npm --prefix layout: node_modules/.bin/
+  const npmBin = join(homedir(), ".pontis", "clients", name, "node_modules", ".bin", name);
+  if (existsSync(npmBin)) return npmBin;
+  // Last resort: trust the shell to find it
+  return name;
+}
+
 export function launchClient(
   clientCmd: string,
   model: string,
@@ -215,7 +223,9 @@ export function launchClient(
         ? "Server Mode"
         : clientCmd === "pi"
           ? "Pi"
-          : "Claude Code";
+          : clientCmd === "opencode"
+            ? "OpenCode"
+            : "Claude Code";
   console.log(
     `\n  ${t.primary(SYM.bullet)}  ${t.bold("Launching " + clientDisplayName)}`,
   );
@@ -258,7 +268,20 @@ export function launchClient(
       apiKey,
       ...extraArgs,
     ];
+  } else if (clientCmd === "opencode") {
+    // OpenCode speaks OpenAI format natively. Point it at the Pontis proxy
+    // and configure the auth/model via env.
+    childEnv.OPENAI_BASE_URL = `${PROXY_URL}/v1`;
+    childEnv.OPENAI_API_KEY = apiKey;
+    // OpenCode uses provider/model notation; we inject the openai provider
+    // since we're speaking OpenAI format through Pontis.
+    if (!extraArgs.includes("--model")) {
+      extraArgs = ["--model", model, ...extraArgs];
+    }
+    // Skip OpenCode's own provider auto-detection — we already configured it
+    childEnv.OPENCODE_DISABLE_MODELS_FETCH = "true";
   } else {
+    // Claude Code
     childEnv.ANTHROPIC_BASE_URL = `${PROXY_URL}/zen`;
     childEnv.ANTHROPIC_API_KEY = apiKey;
     childEnv.ANTHROPIC_MODEL = model;
@@ -278,8 +301,10 @@ export function launchClient(
     `Spawning: ${t.accent(clientCmd)} ${t.muted(displayArgs.join(" "))}\n`,
   );
 
+  const binaryPath = resolveClientBinary(clientCmd as ClientName);
+
   return new Promise((resolve, reject) => {
-    const child = spawn(clientCmd, extraArgs, {
+    const child = spawn(binaryPath, extraArgs, {
       env: childEnv,
       stdio: "inherit",
     });
