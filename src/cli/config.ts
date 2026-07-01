@@ -26,6 +26,9 @@ export const SRC_DIR = join(ROOT, "src");
 export const PONTIS_DIR = join(homedir(), ".pontis");
 export const PROXY_LOG = join(PONTIS_DIR, "proxy.log");
 
+export const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
+export const PI_MODELS_FILE = join(PI_AGENT_DIR, "models.json");
+
 export const FALLBACK_MODELS = [
   "mimo-v2.5-free",
   "deepseek-v4-flash-free",
