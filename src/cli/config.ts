@@ -29,6 +29,9 @@ export const PROXY_LOG = join(PONTIS_DIR, "proxy.log");
 export const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
 export const PI_MODELS_FILE = join(PI_AGENT_DIR, "models.json");
 
+// Client tools managed by Pontis install engine
+export const CLIENTS_DIR = join(PONTIS_DIR, "clients");
+
 export const FALLBACK_MODELS = [
   "mimo-v2.5-free",
   "deepseek-v4-flash-free",

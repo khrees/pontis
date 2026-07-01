@@ -9,6 +9,79 @@ set -e
 
 REPO="khrees/pontis"
 
+# Parse arguments
+INSTALL_CLIENTS=""
+SKIP_CLIENTS=""
+MINIMAL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --with-clients|--with-all)
+      INSTALL_CLIENTS="all"
+      shift
+      ;;
+    --with-claude)
+      INSTALL_CLIENTS="${INSTALL_CLIENTS} claude"
+      shift
+      ;;
+    --with-codex)
+      INSTALL_CLIENTS="${INSTALL_CLIENTS} codex"
+      shift
+      ;;
+    --with-opencode)
+      INSTALL_CLIENTS="${INSTALL_CLIENTS} opencode"
+      shift
+      ;;
+    --with-pi)
+      INSTALL_CLIENTS="${INSTALL_CLIENTS} pi"
+      shift
+      ;;
+    --without-claude)
+      SKIP_CLIENTS="${SKIP_CLIENTS} claude"
+      shift
+      ;;
+    --without-codex)
+      SKIP_CLIENTS="${SKIP_CLIENTS} codex"
+      shift
+      ;;
+    --without-opencode)
+      SKIP_CLIENTS="${SKIP_CLIENTS} opencode"
+      shift
+      ;;
+    --without-pi)
+      SKIP_CLIENTS="${SKIP_CLIENTS} pi"
+      shift
+      ;;
+    --minimal)
+      MINIMAL="1"
+      shift
+      ;;
+    --help|-h)
+      echo "Pontis Installer 🌌"
+      echo ""
+      echo "Usage: curl -fsSL https://pontis.dev/install.sh | bash [-- <flags>]"
+      echo ""
+      echo "Flags:"
+      echo "  --with-clients     Install all client tools (Claude Code, Codex, OpenCode, Pi)"
+      echo "  --with-claude      Install Claude Code"
+      echo "  --with-codex       Install Codex CLI"
+      echo "  --with-opencode    Install OpenCode CLI"
+      echo "  --with-pi          Install Pi coding agent"
+      echo "  --without-<name>   Skip specific client"
+      echo "  --minimal          Install Pontis only (no client tools)"
+      echo "  --help             Show this help"
+      echo ""
+      echo "Environment:"
+      echo "  PONTIS_VERSION     Install a specific version (default: latest)"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Use --help for usage"
+      exit 1
+      ;;
+  esac
+done
+
 # Prefer ~/.local/bin if it's in PATH, otherwise fall back to /usr/local/bin
 if echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
   INSTALL_DIR="$HOME/.local/bin"
@@ -65,7 +138,7 @@ fi
 
 info "$OS-$ARCH$ARCH_WARN"
 
-# Check if Node.js is installed (required by clients like Claude Code/Codex)
+# Check if Node.js is installed
 if ! command -v node &> /dev/null; then
   warn "Node.js is not found. Note that harnesses like Claude Code require Node.js (v18+) to run."
 fi
@@ -175,16 +248,126 @@ else
   sudo mv "$TMP_BINARY" "$INSTALL_DIR/pontis-proxy"
 fi
 
-# Verify installation
+# Verify Pontis installation
+PONTIS_OK=0
 if command -v pontis &> /dev/null; then
+  PONTIS_OK=1
   if [ -n "$VERIFIED" ] || [ -n "$SIGNED" ]; then
     success "Downloaded${VERIFIED:+, verified}${SIGNED:+, $SIGNED}, and $INSTALLED to $INSTALL_DIR"
   else
     success "Downloaded and $INSTALLED to $INSTALL_DIR"
   fi
-  echo ""
-  echo "     Run:  pontis"
-  echo "           pontis claude  /  pontis codex"
 else
   warn "Installed but 'pontis' not found in PATH. You may need to add $INSTALL_DIR to your PATH."
+fi
+
+echo ""
+
+# ──────────────────────────────────────────────
+#  Client tools installation
+# ──────────────────────────────────────────────
+
+# Determine which clients to install
+CLIENTS_TO_INSTALL=""
+
+if [ -n "$MINIMAL" ]; then
+  # --minimal: skip all clients
+  :
+elif [ -n "$INSTALL_CLIENTS" ]; then
+  # --with-* flags explicitly specified
+  if [ "$INSTALL_CLIENTS" = "all" ]; then
+    CLIENTS_TO_INSTALL="claude codex opencode pi"
+  else
+    CLIENTS_TO_INSTALL="$INSTALL_CLIENTS"
+  fi
+elif [ -z "$SKIP_CLIENTS" ] && [ -z "$INSTALL_CLIENTS" ]; then
+  # No flags — check env var
+  if [ -n "$PONTIS_INSTALL_CLIENTS" ]; then
+    if [ "$PONTIS_INSTALL_CLIENTS" = "all" ] || [ "$PONTIS_INSTALL_CLIENTS" = "true" ]; then
+      CLIENTS_TO_INSTALL="claude codex opencode pi"
+    elif [ "$PONTIS_INSTALL_CLIENTS" = "none" ] || [ "$PONTIS_INSTALL_CLIENTS" = "false" ]; then
+      :
+    else
+      CLIENTS_TO_INSTALL="$PONTIS_INSTALL_CLIENTS"
+    fi
+  fi
+  # No flags at all, no env var → default to Pontis-only (opt-in)
+fi
+
+# Remove skipped clients
+for skip in $SKIP_CLIENTS; do
+  CLIENTS_TO_INSTALL=$(echo "$CLIENTS_TO_INSTALL" | tr ' ' '\n' | grep -v "^$skip$" | tr '\n' ' ' | xargs)
+done
+
+# Install each client if not already on PATH
+if [ -n "$CLIENTS_TO_INSTALL" ]; then
+  info "Checking client tools..."
+
+  # Resolve the pontis CLI to use for client installation
+  # If we just installed it, use it directly
+  PONTIS_CMD="$INSTALL_DIR/pontis"
+  if [ ! -f "$PONTIS_CMD" ]; then
+    PONTIS_CMD="pontis"
+  fi
+
+  for client in $CLIENTS_TO_INSTALL; do
+    # Check if already installed
+    if command -v "$client" &> /dev/null; then
+      success "$client already on PATH — skipping"
+      continue
+    fi
+
+    case "$client" in
+      claude)
+        info "Installing Claude Code..."
+        if curl -fsSL https://claude.ai/install.sh | bash; then
+          success "Claude Code installed"
+        else
+          warn "Claude Code installation failed — install manually: curl -fsSL https://claude.ai/install.sh | bash"
+        fi
+        ;;
+      codex)
+        info "Installing Codex CLI..."
+        if curl -fsSL https://chatgpt.com/codex/install.sh | sh; then
+          success "Codex CLI installed"
+        else
+          warn "Codex CLI installation failed — install manually: curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+        fi
+        ;;
+      opencode)
+        info "Installing OpenCode..."
+        if curl -fsSL https://opencode.ai/install | bash; then
+          success "OpenCode installed"
+        else
+          warn "OpenCode installation failed — install manually: curl -fsSL https://opencode.ai/install | bash"
+        fi
+        ;;
+      pi)
+        info "Installing Pi coding agent..."
+        if command -v npm &> /dev/null; then
+          # Check Node version
+          NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])" 2>/dev/null || echo "0")
+          if [ "$NODE_MAJOR" -ge 22 ] 2>/dev/null; then
+            if npm install -g --ignore-scripts @earendil-works/pi-coding-agent; then
+              success "Pi coding agent installed"
+            else
+              warn "Pi installation failed — install manually: npm install -g @earendil-works/pi-coding-agent"
+            fi
+          else
+            warn "Pi requires Node.js >= 22.19 (current: $(node -v 2>/dev/null || echo 'unknown')) — skipping"
+          fi
+        else
+          warn "npm not found — cannot install Pi. Install manually: npm install -g @earendil-works/pi-coding-agent"
+        fi
+        ;;
+    esac
+  done
+fi
+
+echo ""
+if [ "$PONTIS_OK" = "1" ]; then
+  echo "     Run:  pontis"
+  echo "           pontis claude  /  pontis codex  /  pontis opencode  /  pontis pi"
+  echo ""
+  echo "     Manage clients:  pontis install"
 fi

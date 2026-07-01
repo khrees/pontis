@@ -32,6 +32,16 @@ import { cmdUpdateKey, fetchWorkingOpenCodeModels } from "./provider-opencode";
 import { fetchLocalModels } from "./provider-local";
 import { fetchCloudflareModels } from "./provider-cloudflare";
 import { PORT, PROXY_URL } from "./proxy-manager";
+import {
+  ALL_CLIENTS,
+  CLIENTS,
+  isInstalled,
+  checkAll,
+  installClient,
+  ensureClientInstalled,
+  checkNodeVersion,
+  type ClientName,
+} from "./install-engine";
 
 const program = new Command();
 
@@ -39,7 +49,7 @@ program
   .name("pontis")
   .version(VERSION)
   .description(
-    "Translation proxy bridging Anthropic/OpenAI formats to run Claude Code, Codex, Pi, and local models",
+    "Translation proxy bridging Anthropic/OpenAI formats to run Claude Code, Codex, Pi, OpenCode, and local models",
   )
   .option("--json", "Output in JSON format (for scripting)");
 
@@ -52,6 +62,14 @@ function addPontisOptions(cmd: Command) {
     .option(
       "-f, --format <format>",
       "Upstream format (openai | anthropic | openai-completions)",
+    )
+    .option(
+      "--install",
+      "Auto-install client tool if missing (default: prompt)",
+    )
+    .option(
+      "--no-install",
+      "Skip auto-install, error if client tool is missing",
     );
 }
 
@@ -83,6 +101,20 @@ addPontisOptions(
   });
 });
 
+// Subcommand: opencode
+addPontisOptions(
+  program
+    .command("opencode")
+    .description("Start proxy and launch OpenCode with a configured model")
+    .allowUnknownOption(true)
+    .allowExcessArguments(true),
+).action((opts) => {
+  runWithConfig("opencode", opts, extractChildArgs("opencode")).catch((e) => {
+    console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
+    process.exit(1);
+  });
+});
+
 // Subcommand: pi
 addPontisOptions(
   program
@@ -108,6 +140,120 @@ addPontisOptions(
     process.exit(1);
   });
 });
+
+// Subcommand: install — manage client tool installations
+program
+  .command("install")
+  .description("Install or check coding agent CLI tools")
+  .argument("[clients...]", "Client(s) to install (claude, codex, opencode, pi, or 'all')")
+  .option("--list", "Show installed clients and versions")
+  .option("--check", "Exit 0 if all specified clients are installed, 1 if missing")
+  .option("--json", "Output in JSON format")
+  .action(async (clients: string[], opts: { list?: boolean; check?: boolean; json?: boolean }) => {
+    try {
+      // --list: show status of all clients
+      if (opts.list) {
+        const status = checkAll();
+        if (opts.json || jsonMode) {
+          const result = ALL_CLIENTS.map((name) => ({
+            name,
+            displayName: CLIENTS[name].name,
+            installed: status[name],
+            binary: CLIENTS[name].binary,
+          }));
+          outputJson({ clients: result });
+        }
+        section("Installed Clients");
+        for (const name of ALL_CLIENTS) {
+          const def = CLIENTS[name];
+          if (status[name]) {
+            kv(def.name, t.success("installed"));
+          } else {
+            const nodeIssue = checkNodeVersion(name);
+            kv(def.name, nodeIssue ? t.warning(nodeIssue) : t.muted("not installed"));
+          }
+        }
+        console.log();
+        badge("muted", "Manage: pontis install <client>");
+        return;
+      }
+
+      // --check: exit code only
+      if (opts.check) {
+        const names = clients.length > 0
+          ? (clients.includes("all") ? ALL_CLIENTS : clients as ClientName[])
+          : ALL_CLIENTS;
+        const status = checkAll();
+        const missing = names.filter((n) => !status[n as ClientName]);
+        if (missing.length > 0) {
+          if (opts.json || jsonMode) {
+            outputJsonError("missing_clients", `Missing: ${missing.join(", ")}`);
+          }
+          for (const name of missing) {
+            badge("error", `${CLIENTS[name as ClientName].name} is not installed`);
+          }
+          process.exit(1);
+        }
+        if (opts.json || jsonMode) {
+          outputJson({ ok: true, clients: names });
+        }
+        badge("success", "All specified clients are installed");
+        return;
+      }
+
+      // Install specified clients (or prompt if none specified)
+      const names = clients.length > 0
+        ? (clients.includes("all") ? ALL_CLIENTS : clients as ClientName[])
+        : null;
+
+      if (names) {
+        // Non-interactive: install specified clients
+        for (const name of names) {
+          if (isInstalled(name)) {
+            badge("muted", `${CLIENTS[name].name} already installed — skipping`);
+            continue;
+          }
+          await installClient(name, { interactive: false });
+        }
+        if (opts.json || jsonMode) {
+          const status = checkAll();
+          outputJson({ clients: names.map((n) => ({ name: n, installed: status[n] })) });
+        }
+      } else {
+        // Interactive: let user choose
+        const { select } = await import("./ui");
+        const choices = ALL_CLIENTS.map((name) => {
+          const def = CLIENTS[name];
+          const installed = isInstalled(name);
+          const suffix = installed ? t.success(" ✓ installed") : t.muted(" not installed");
+          return `${t.primary(def.name)}${suffix}` as string;
+        });
+        choices.push(`${t.primary("All")}     ${t.muted("Install all missing clients")}` as string);
+        choices.push(`${t.muted("Cancel")}` as string);
+
+        const result = await select("Which client(s) would you like to install?", choices);
+        if (result.index === ALL_CLIENTS.length) {
+          // "All"
+          for (const name of ALL_CLIENTS) {
+            if (!isInstalled(name)) {
+              await installClient(name, { interactive: true });
+            }
+          }
+        } else if (result.index < ALL_CLIENTS.length) {
+          const name = ALL_CLIENTS[result.index];
+          if (!isInstalled(name)) {
+            await installClient(name, { interactive: true });
+          } else {
+            badge("muted", `${CLIENTS[name].name} is already installed`);
+          }
+        }
+      }
+    } catch (e: any) {
+      if (jsonMode) outputJsonError("install_failed", e.message || String(e));
+      console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
+      process.exit(1);
+    }
+  });
 
 // Subcommand: update-key
 program
@@ -303,6 +449,9 @@ program
           ? existsSync(CLOUDFLARE_CONFIG_FILE)
           : getOpenCodeApiKey() !== null;
 
+      // Check client installations
+      const clientStatus = checkAll();
+
       if (jsonMode) {
         outputJson({
           proxy: { running: proxyRunning, port: proxyPort, url: PROXY_URL },
@@ -313,6 +462,10 @@ program
           debug,
           apiKeySaved: keyExists,
           logs: PROXY_LOG,
+          clients: ALL_CLIENTS.map((n) => ({
+            name: n,
+            installed: clientStatus[n],
+          })),
         });
       }
 
@@ -336,6 +489,19 @@ program
       kv("Debug", debug ? t.success("on") : t.muted("off"));
       kv("API Key", keyExists ? t.success("saved") : t.warning("not found"));
       kv("Logs", t.muted(PROXY_LOG));
+      console.log();
+
+      section("Installed Clients");
+      for (const name of ALL_CLIENTS) {
+        const def = CLIENTS[name];
+        if (clientStatus[name]) {
+          kv(def.name, t.success("installed"));
+        } else {
+          kv(def.name, t.muted("not installed"));
+        }
+      }
+      console.log();
+      badge("muted", "Manage: pontis install <client>");
       console.log();
     } catch (e: any) {
       if (jsonMode) outputJsonError("status_failed", e.message || String(e));
@@ -374,6 +540,8 @@ const KNOWN_PONTIS_FLAGS = new Set([
   "-f",
   "--format",
   "--json",
+  "--install",
+  "--no-install",
 ]);
 
 function extractChildArgs(subcommand: string): string[] {
