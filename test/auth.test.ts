@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { extractApiKey, validateApiKey } from '../src/auth';
+import { InvalidApiKeyError, ApiKeyLengthError } from '../src/errors';
 
 describe('extractApiKey', () => {
   it('extracts from X-Api-Key header', () => {
@@ -34,15 +35,10 @@ describe('validateApiKey', () => {
   });
 
   it('returns error for missing key', () => {
-    const err = validateApiKey(null);
-    expect(err).not.toBeNull();
-    expect(err!.status).toBe(401);
-    expect(err!.body).toHaveProperty('error');
+    expect(() => validateApiKey(null)).toThrow(InvalidApiKeyError);
   });
 
   it('returns error for short key (< 32 chars)', () => {
-    const err = validateApiKey('short-key');
-    expect(err).not.toBeNull();
-    expect(err!.status).toBe(401);
+    expect(() => validateApiKey('short-key')).toThrow(ApiKeyLengthError);
   });
 });
