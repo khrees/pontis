@@ -7,11 +7,20 @@ vi.mock('../src/cli/ui', () => ({
   select: vi.fn(),
   input: vi.fn(),
   confirm: vi.fn(),
-  createSpinner: vi.fn(),
+  createSpinner: vi.fn(() => ({ stop: vi.fn() })),
   badge: vi.fn(),
   section: vi.fn(),
   error: vi.fn(),
 }));
+
+// Prevent saved config from short-circuiting interactive prompts
+vi.mock('../src/cli/config', async () => {
+  const actual = await vi.importActual('../src/cli/config');
+  return {
+    ...actual,
+    getCloudflareConfigSaved: () => ({} as Record<string, string>),
+  };
+});
 
 describe('Cloudflare Provider', () => {
   beforeEach(() => {
@@ -59,11 +68,7 @@ describe('Cloudflare Provider', () => {
     });
 
     it('should handle timeout errors', async () => {
-      global.fetch = vi.fn().mockImplementation(() => {
-        return new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Timeout')), 6000);
-        });
-      });
+      global.fetch = vi.fn().mockRejectedValue(new Error('Timeout'));
 
       const models = await fetchCloudflareModels('test-account', 'test-token');
 
@@ -94,29 +99,36 @@ describe('Cloudflare Provider', () => {
   });
 
   describe('setupCloudflareInteractive', () => {
+    afterEach(() => {
+      delete process.env.PONTIS_UPSTREAM_URL;
+      delete process.env.PONTIS_UPSTREAM_FORMAT;
+    });
+
     it('should successfully set up Cloudflare configuration', async () => {
-      const mockConfig = {
-        apiToken: 'test-token',
-        accountId: 'test-account',
-        gatewayId: 'default',
-      };
+      // Setup mock UI responses in call order:
+      // getCloudflareConfigInteractive: input(accountId), input(gatewayId), input(apiToken), confirm(save)
+      vi.mocked(ui.input)
+        .mockResolvedValueOnce('test-account')  // Account ID
+        .mockResolvedValueOnce('default')         // Gateway ID
+        .mockResolvedValueOnce('test-token');     // API Token
+      vi.mocked(ui.confirm).mockResolvedValueOnce(true);
 
-      vi.mocked(ui.input).mockResolvedValue('test-account');
-      vi.mocked(ui.input).mockResolvedValue('default');
-      vi.mocked(ui.input).mockResolvedValue('test-token');
-      vi.mocked(ui.confirm).mockResolvedValue(true);
-      vi.mocked(ui.select).mockResolvedValue({ index: 0, value: '@cf/moonshotai/kimi-k2.6' });
-
-      // Mock fetchCloudflareModels
-      const mockModels = ['@cf/moonshotai/kimi-k2.6', '@cf/qwen/qwen2.5-7b-instruct'];
-      vi.doMock('../src/cli/provider-cloudflare', () => ({
-        fetchCloudflareModels: vi.fn().mockResolvedValue(mockModels),
-        setupCloudflareInteractive: vi.fn().mockResolvedValue({
-          model: '@cf/moonshotai/kimi-k2.6',
-          apiKey: 'test-token',
-          upstreamUrl: 'https://gateway.ai.cloudflare.com/v1/test-account/default/workers-ai/v1',
+      // fetchCloudflareModels will use global.fetch
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          result: [
+            { id: '@cf/moonshotai/kimi-k2.6' },
+            { id: '@cf/qwen/qwen2.5-7b-instruct' },
+          ],
         }),
-      }));
+      });
+
+      // setupCloudflareInteractive: select(category), select(model)
+      vi.mocked(ui.select)
+        .mockResolvedValueOnce({ index: 0, value: '🚀 Flagship / Coding' })  // category
+        .mockResolvedValueOnce({ index: 0, value: '@cf/moonshotai/kimi-k2.6' });  // model
 
       const result = await setupCloudflareInteractive();
 
@@ -128,47 +140,56 @@ describe('Cloudflare Provider', () => {
     });
 
     it('should use fallback models when API call fails', async () => {
-      vi.mocked(ui.input).mockResolvedValue('test-account');
-      vi.mocked(ui.input).mockResolvedValue('default');
-      vi.mocked(ui.input).mockResolvedValue('test-token');
-      vi.mocked(ui.confirm).mockResolvedValue(true);
-      vi.mocked(ui.select).mockResolvedValue({ index: 0, value: '@cf/moonshotai/kimi-k2.6' });
+      // Setup mock UI responses in call order
+      vi.mocked(ui.input)
+        .mockResolvedValueOnce('test-account')  // Account ID
+        .mockResolvedValueOnce('default')         // Gateway ID
+        .mockResolvedValueOnce('test-token');     // API Token
+      vi.mocked(ui.confirm).mockResolvedValueOnce(true);
 
-      // Mock fetchCloudflareModels to return empty array
-      vi.doMock('../src/cli/provider-cloudflare', () => ({
-        fetchCloudflareModels: vi.fn().mockResolvedValue([]),
-        setupCloudflareInteractive: vi.fn().mockResolvedValue({
-          model: '@cf/moonshotai/kimi-k2.6',
-          apiKey: 'test-token',
-          upstreamUrl: 'https://gateway.ai.cloudflare.com/v1/test-account/default/workers-ai/v1',
-        }),
-      }));
+      // fetchCloudflareModels returns empty (API call fails)
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+      });
+
+      // Fallback models are used — select(category), then select(model from fallbacks)
+      vi.mocked(ui.select)
+        .mockResolvedValueOnce({ index: 0, value: '🚀 Flagship / Coding' })  // category
+        .mockResolvedValueOnce({ index: 0, value: '@cf/moonshotai/kimi-k2.6' });  // model (from fallback)
 
       const result = await setupCloudflareInteractive();
 
       expect(result.model).toBe('@cf/moonshotai/kimi-k2.6');
+      expect(result.apiKey).toBe('test-token');
     });
 
     it('should handle custom model ID input', async () => {
-      vi.mocked(ui.input).mockResolvedValue('test-account');
-      vi.mocked(ui.input).mockResolvedValue('default');
-      vi.mocked(ui.input).mockResolvedValue('test-token');
-      vi.mocked(ui.confirm).mockResolvedValue(true);
-      vi.mocked(ui.select).mockResolvedValue({ index: -1, value: '' }); // Custom input
-      vi.mocked(ui.input).mockResolvedValue('@cf/custom-model');
+      // Setup mock UI responses in call order
+      vi.mocked(ui.input)
+        .mockResolvedValueOnce('test-account')  // Account ID
+        .mockResolvedValueOnce('default')         // Gateway ID
+        .mockResolvedValueOnce('test-token');     // API Token
+      vi.mocked(ui.confirm).mockResolvedValueOnce(true);
 
-      vi.doMock('../src/cli/provider-cloudflare', () => ({
-        fetchCloudflareModels: vi.fn().mockResolvedValue(['@cf/moonshotai/kimi-k2.6']),
-        setupCloudflareInteractive: vi.fn().mockResolvedValue({
-          model: '@cf/custom-model',
-          apiKey: 'test-token',
-          upstreamUrl: 'https://gateway.ai.cloudflare.com/v1/test-account/default/workers-ai/v1',
+      // fetchCloudflareModels returns models (but we go straight to custom input)
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          result: [{ id: '@cf/moonshotai/kimi-k2.6' }],
         }),
-      }));
+      });
+
+      // First select returns index 4 = "✏️ Enter Custom Model ID" (custom input)
+      vi.mocked(ui.select)
+        .mockResolvedValueOnce({ index: 4, value: '✏️ Enter Custom Model ID' });
+      // Then input is called for custom model ID
+      vi.mocked(ui.input).mockResolvedValueOnce('@cf/custom-model');
 
       const result = await setupCloudflareInteractive();
 
       expect(result.model).toBe('@cf/custom-model');
+      expect(result.apiKey).toBe('test-token');
     });
   });
 });
