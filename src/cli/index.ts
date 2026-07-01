@@ -38,7 +38,6 @@ import {
   isInstalled,
   checkAll,
   installClient,
-  ensureClientInstalled,
   checkNodeVersion,
   type ClientName,
 } from "./install-engine";

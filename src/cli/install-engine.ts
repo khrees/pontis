@@ -10,10 +10,9 @@
 
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { homedir } from "node:os";
-import { badge, confirm, createSpinner, t } from "./ui";
+import { badge, confirm, createSpinner } from "./ui";
 
 // ──────────────────────────────────────────────
 //  Types

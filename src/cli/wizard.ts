@@ -16,6 +16,8 @@ import {
   ensureClientReady,
   setupPiProvider,
   cleanupPiProvider,
+  setupOpenCodeProvider,
+  cleanupOpenCodeProvider,
 } from "./client-launcher";
 import {
   getCloudflareConfigSaved,
@@ -71,10 +73,13 @@ export async function runInteractiveWizard(env: PontisEnv) {
   try {
     await startProxy(model, clientCmd === "codex");
 
-    // Step 6: Pi provider config (must be done after proxy is up)
+    // Step 6: Client-specific provider config (must be done after proxy is up)
     if (clientCmd === "pi") {
       setupPiProvider(apiKey, model);
       badge("muted", `Pi config: ~/.pi/agent/models.json (pontis provider)`);
+    } else if (clientCmd === "opencode") {
+      setupOpenCodeProvider(apiKey);
+      badge("muted", `OpenCode config: ~/.local/share/opencode/auth.json (pontis proxy)`);
     }
 
     // Step 7: Connectivity
@@ -87,6 +92,7 @@ export async function runInteractiveWizard(env: PontisEnv) {
     await launchClient(clientCmd, model, apiKey, []);
   } finally {
     if (clientCmd === "pi") cleanupPiProvider();
+    if (clientCmd === "opencode") cleanupOpenCodeProvider();
     killActiveProxy();
     process.removeAllListeners("SIGINT");
     process.removeAllListeners("SIGTERM");
@@ -202,6 +208,8 @@ export async function runWithConfig(
 
     if (clientCmd === "pi") {
       setupPiProvider(apiKey, model);
+    } else if (clientCmd === "opencode") {
+      setupOpenCodeProvider(apiKey);
     }
 
     const ok = await testConnectivity(apiKey, model);
@@ -209,6 +217,7 @@ export async function runWithConfig(
     await launchClient(clientCmd, model, apiKey, extraArgs);
   } finally {
     if (clientCmd === "pi") cleanupPiProvider();
+    if (clientCmd === "opencode") cleanupOpenCodeProvider();
     killActiveProxy();
     process.removeAllListeners("SIGINT");
     process.removeAllListeners("SIGTERM");
