@@ -32,6 +32,10 @@ export const PI_MODELS_FILE = join(PI_AGENT_DIR, "models.json");
 // Client tools managed by Pontis install engine
 export const CLIENTS_DIR = join(PONTIS_DIR, "clients");
 
+// OpenCode data directory (managed by OpenCode itself, but we write auth entries)
+export const OPENCODE_DATA_DIR = join(homedir(), ".local", "share", "opencode");
+export const OPENCODE_AUTH_FILE = join(OPENCODE_DATA_DIR, "auth.json");
+
 export const FALLBACK_MODELS = [
   "mimo-v2.5-free",
   "deepseek-v4-flash-free",

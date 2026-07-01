@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { t, SYM, badge, kv, confirm, createSpinner, warn } from "./ui";
 import { PROXY_URL } from "./proxy-manager";
-import { PI_AGENT_DIR, PI_MODELS_FILE } from "./config";
+import { PI_AGENT_DIR, PI_MODELS_FILE, OPENCODE_AUTH_FILE, OPENCODE_DATA_DIR } from "./config";
 import {
   isInstalled,
   ensureClientInstalled,
@@ -156,6 +156,67 @@ export function setupPiProvider(apiKey: string, model?: string): void {
  * Remove the "pontis" provider from `~/.pi/agent/models.json`.
  * Idempotent — safe to call even if the file doesn't exist.
  */
+// ──────────────────────────────────────────────
+//  OpenCode provider configuration
+// ──────────────────────────────────────────────
+
+const OPENCODE_PROVIDER_ID = "openai";
+
+/**
+ * Write an auth entry for OpenCode's `openai` provider pointing at the
+ * Pontis proxy. OpenCode reads credentials from ~/.local/share/opencode/auth.json
+ * and does NOT respect OPENAI_BASE_URL / OPENAI_API_KEY env vars.
+ */
+export function setupOpenCodeProvider(apiKey: string): void {
+  mkdirSync(OPENCODE_DATA_DIR, { recursive: true, mode: 0o700 });
+
+  let existing: Record<string, any> = {};
+  if (existsSync(OPENCODE_AUTH_FILE)) {
+    try {
+      existing = JSON.parse(readFileSync(OPENCODE_AUTH_FILE, "utf-8"));
+    } catch {
+      // Corrupt file — start fresh
+    }
+  }
+
+  existing[OPENCODE_PROVIDER_ID] = {
+    apiKey,
+    baseUrl: `${PROXY_URL}/v1`,
+  };
+
+  writeFileSync(OPENCODE_AUTH_FILE, JSON.stringify(existing, null, 2), {
+    mode: 0o600,
+  });
+}
+
+/**
+ * Remove the Pontis proxy entry from OpenCode's auth file.
+ * Only removes the entry if it points at localhost:8787 (our proxy).
+ */
+export function cleanupOpenCodeProvider(): void {
+  if (!existsSync(OPENCODE_AUTH_FILE)) return;
+
+  try {
+    const raw = readFileSync(OPENCODE_AUTH_FILE, "utf-8");
+    const content = JSON.parse(raw);
+    const entry = content[OPENCODE_PROVIDER_ID];
+
+    if (entry && typeof entry.baseUrl === "string" && entry.baseUrl.includes("localhost:8787")) {
+      delete content[OPENCODE_PROVIDER_ID];
+
+      if (Object.keys(content).length === 0) {
+        unlinkSync(OPENCODE_AUTH_FILE);
+      } else {
+        writeFileSync(OPENCODE_AUTH_FILE, JSON.stringify(content, null, 2), {
+          mode: 0o600,
+        });
+      }
+    }
+  } catch {
+    // Leave a corrupt file alone
+  }
+}
+
 export function cleanupPiProvider(): void {
   if (!existsSync(PI_MODELS_FILE)) return;
 
@@ -269,16 +330,14 @@ export function launchClient(
       ...extraArgs,
     ];
   } else if (clientCmd === "opencode") {
-    // OpenCode speaks OpenAI format natively. Point it at the Pontis proxy
-    // and configure the auth/model via env.
-    childEnv.OPENAI_BASE_URL = `${PROXY_URL}/v1`;
-    childEnv.OPENAI_API_KEY = apiKey;
-    // OpenCode uses provider/model notation; we inject the openai provider
-    // since we're speaking OpenAI format through Pontis.
+    // OpenCode uses provider/model notation and reads credentials from
+    // ~/.local/share/opencode/auth.json (not env vars).
+    // The auth file was written by setupOpenCodeProvider() before launch.
+    // We pass the model as openai/<model> since Pontis speaks OpenAI format.
     if (!extraArgs.includes("--model")) {
-      extraArgs = ["--model", model, ...extraArgs];
+      extraArgs = ["--model", `openai/${model}`, ...extraArgs];
     }
-    // Skip OpenCode's own provider auto-detection — we already configured it
+    // Skip auto-fetch of models — we already know what we're using
     childEnv.OPENCODE_DISABLE_MODELS_FETCH = "true";
   } else {
     // Claude Code
