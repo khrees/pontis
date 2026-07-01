@@ -10,7 +10,13 @@ import { setupLocalInteractive, selectLocalEngineInteractive } from "./provider-
 import { setupOpenCodeInteractive } from "./provider-opencode";
 import { setupCloudflareInteractive } from "./provider-cloudflare";
 import { startProxy, killActiveProxy } from "./proxy-manager";
-import { launchClient, testConnectivity } from "./client-launcher";
+import {
+  launchClient,
+  testConnectivity,
+  ensurePiInstalled,
+  setupPiProvider,
+  cleanupPiProvider,
+} from "./client-launcher";
 import {
   getCloudflareConfigSaved,
   getLocalApiKey,
@@ -49,22 +55,35 @@ export async function runInteractiveWizard(env: PontisEnv) {
   // Step 3: Pick client
   const clientCmd = env.clientCmd || (await selectClientInteractive());
 
-  // Step 4: Start proxy
+  // Step 4: Client preparation (Pi-specific setup)
+  if (clientCmd === "pi") {
+    const piOk = await ensurePiInstalled();
+    if (!piOk) process.exit(1);
+  }
+
+  // Step 5: Start proxy
   section("Infrastructure");
   badge("muted", `Model: ${model}`);
 
   try {
     await startProxy(model, clientCmd === "codex");
 
-    // Step 5: Connectivity
+    // Step 6: Pi provider config (must be done after proxy is up)
+    if (clientCmd === "pi") {
+      setupPiProvider(apiKey, model);
+      badge("muted", `Pi config: ~/.pi/agent/models.json (pontis provider)`);
+    }
+
+    // Step 7: Connectivity
     const ok = await testConnectivity(apiKey, model);
     if (!ok) {
       process.exit(1);
     }
 
-    // Step 6: Launch
+    // Step 8: Launch
     await launchClient(clientCmd, model, apiKey, []);
   } finally {
+    if (clientCmd === "pi") cleanupPiProvider();
     killActiveProxy();
     process.removeAllListeners("SIGINT");
     process.removeAllListeners("SIGTERM");
@@ -143,14 +162,15 @@ export async function runWithConfig(
   if (!model) error("Model required.");
 
   section("Configuration");
-  kv(
-    "Mode",
+  const modeLabel =
     clientCmd === "codex"
       ? "Codex"
       : clientCmd === "server"
         ? "Server"
-        : "Claude Code",
-  );
+        : clientCmd === "pi"
+          ? "Pi"
+          : "Claude Code";
+  kv("Mode", modeLabel);
   kv(
     "Provider",
     provider === "local"
@@ -163,12 +183,23 @@ export async function runWithConfig(
   if (upstreamUrl) kv("Upstream", upstreamUrl);
   console.log();
 
+  if (clientCmd === "pi") {
+    const piOk = await ensurePiInstalled();
+    if (!piOk) process.exit(1);
+  }
+
   try {
     await startProxy(model, clientCmd === "codex");
+
+    if (clientCmd === "pi") {
+      setupPiProvider(apiKey, model);
+    }
+
     const ok = await testConnectivity(apiKey, model);
     if (!ok) process.exit(1);
     await launchClient(clientCmd, model, apiKey, extraArgs);
   } finally {
+    if (clientCmd === "pi") cleanupPiProvider();
     killActiveProxy();
     process.removeAllListeners("SIGINT");
     process.removeAllListeners("SIGTERM");
