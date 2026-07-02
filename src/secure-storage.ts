@@ -4,9 +4,10 @@
  * Falls back to environment variables in non-Node.js environments (Cloudflare Workers).
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import * as cryptoModule from 'crypto';
 
 // Check if we're in a Node.js environment
 const isNodeEnvironment = typeof process !== 'undefined' && 
@@ -16,13 +17,8 @@ const isNodeEnvironment = typeof process !== 'undefined' &&
 // In-memory fallback for non-Node environments
 const memoryStore: Record<string, string> = {};
 
-// Conditional crypto imports
-let crypto: any;
-try {
-  crypto = require('crypto');
-} catch {
-  // Crypto not available, will use fallback
-}
+// Crypto module import
+const crypto = cryptoModule && typeof cryptoModule.randomBytes === 'function' ? cryptoModule : null;
 
 const STORAGE_DIR = join(homedir(), '.pontis');
 const CREDENTIALS_FILE = join(STORAGE_DIR, 'credentials.enc');
@@ -230,8 +226,7 @@ export function clearAllCredentials(): void {
     const randomData = crypto.randomBytes(1024);
     writeFileSync(CREDENTIALS_FILE, randomData.toString('hex'));
     // Then delete the file
-    const fs = require('fs');
-    fs.unlinkSync(CREDENTIALS_FILE);
+    unlinkSync(CREDENTIALS_FILE);
   }
 }
 
@@ -261,8 +256,7 @@ export function migrateFromPlainText(
     // Securely delete the plain text file
     const randomData = crypto.randomBytes(1024);
     writeFileSync(plainTextFile, randomData.toString('hex'));
-    const fs = require('fs');
-    fs.unlinkSync(plainTextFile);
+    unlinkSync(plainTextFile);
     
     return true;
   } catch {
