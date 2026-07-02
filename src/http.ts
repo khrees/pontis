@@ -1,11 +1,9 @@
-declare const process: { env?: Record<string, string | undefined> };
-
 import { warnLog } from "./logger";
+import { getTimeoutMs } from "./env";
 import {
   UpstreamTimeoutError,
   UpstreamConnectionError,
   errorToResponse,
-  UpstreamError,
 } from "./errors";
 
 export const SSE_HEADERS = {
@@ -29,11 +27,6 @@ export function generateRequestId(): string {
   return `req_${Date.now().toString(36)}_${(++requestCounter % 65536).toString(36)}`;
 }
 
-/** Read an env var with a fallback. */
-function getEnv(name: string, fallback = ""): string {
-  return process?.env?.[name] || fallback;
-}
-
 /**
  * Fetch with a configurable timeout.
  *
@@ -44,7 +37,7 @@ export async function fetchWithTimeout(
   url: string,
   options: RequestInit & { timeout?: number } = {},
 ): Promise<Response> {
-  const timeoutMs = options.timeout ?? parseInt(getEnv("PONTIS_TIMEOUT_MS", "120000"), 10);
+  const timeoutMs = options.timeout ?? getTimeoutMs(120000);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 

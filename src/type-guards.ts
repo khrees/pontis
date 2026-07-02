@@ -242,23 +242,26 @@ export function getFirstItem<T>(
 }
 
 // Safe JSON parsing with type guards
-export function safeParseJson<T>(json: string, validator?: (value: unknown) => value is T): T | null {
+export function safeParseJson<T>(json: string, validator?: (value: unknown) => value is T, fallback?: T): T | null {
   try {
     const parsed = JSON.parse(json);
-    if (validator && !validator(parsed)) return null;
+    if (validator && !validator(parsed)) return fallback ?? null;
     return parsed as T;
   } catch {
-    return null;
+    return fallback ?? null;
   }
 }
 
 // Safe number conversion
 export function safeToNumber(value: unknown, defaultValue: number = 0): number {
-  if (isNumber(value)) return value;
+  if (typeof value === "number") {
+    return isFinite(value) ? value : defaultValue;
+  }
   if (isString(value)) {
     const parsed = parseFloat(value);
     return isNaN(parsed) ? defaultValue : parsed;
   }
+  if (typeof value === "boolean") return value ? 1 : 0;
   return defaultValue;
 }
 

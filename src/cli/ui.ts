@@ -93,10 +93,12 @@ export async function selectClientInteractive(): Promise<string> {
   const result = await select("Launch which client?", [
     `${t.primary("Claude Code")}  ${t.muted("Anthropic's AI coding assistant")}`,
     `${t.primary("Codex")}    ${t.muted("OpenAI's terminal coding agent")}`,
+    `${t.primary("Pi")}      ${t.muted("The Pi coding agent (pi.dev)")}`,
     `${t.primary("Server")}   ${t.muted("Run proxy server only (no client launcher)")}`,
   ]);
   if (result.index === 1) return "codex";
-  if (result.index === 2) return "server";
+  if (result.index === 2) return "pi";
+  if (result.index === 3) return "server";
   return "claude";
 }
 
