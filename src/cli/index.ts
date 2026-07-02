@@ -39,7 +39,7 @@ program
   .name("pontis")
   .version(VERSION)
   .description(
-    "Translation proxy bridging Anthropic/OpenAI formats to run Claude Code, Codex, and local models",
+    "Translation proxy bridging Anthropic/OpenAI formats to run Claude Code, Codex, Pi, and local models",
   )
   .option("--json", "Output in JSON format (for scripting)");
 
@@ -78,6 +78,20 @@ addPontisOptions(
     .allowExcessArguments(true),
 ).action((opts) => {
   runWithConfig("codex", opts, extractChildArgs("codex")).catch((e) => {
+    console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
+    process.exit(1);
+  });
+});
+
+// Subcommand: pi
+addPontisOptions(
+  program
+    .command("pi")
+    .description("Start proxy and launch Pi coding agent with a configured model")
+    .allowUnknownOption(true)
+    .allowExcessArguments(true),
+).action((opts) => {
+  runWithConfig("pi", opts, extractChildArgs("pi")).catch((e) => {
     console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
     process.exit(1);
   });

@@ -1,5 +1,10 @@
-declare const process: { env?: Record<string, string | undefined> };
-
+import {
+  getProvider,
+  getModel,
+  getUpstreamUrl,
+  getUpstreamFormat,
+  isCodexMode,
+} from "./env";
 import { extractApiKey, validateApiKey } from "./auth";
 
 export const GO_UPSTREAM = "https://opencode.ai/zen/go/v1";
@@ -8,8 +13,7 @@ export const DEFAULT_UPSTREAM = GO_UPSTREAM;
 export const VISION_MODEL = "qwen3.6-plus";
 
 export function getVisionModel(): string {
-  const provider = process?.env?.PONTIS_PROVIDER?.toLowerCase();
-  if (provider === "cloudflare") {
+  if (getProvider() === "cloudflare") {
     return "@cf/meta/llama-3.2-11b-vision-instruct";
   }
   return VISION_MODEL;
@@ -55,11 +59,11 @@ export type RouteConfig = {
 };
 
 export function getDefaultFreeModel(): string {
-  const provider = process?.env?.PONTIS_PROVIDER?.toLowerCase();
-  if (provider === "cloudflare") {
-    return process?.env?.PONTIS_MODEL || "@cf/moonshotai/kimi-k2.6";
+  const model = getModel();
+  if (getProvider() === "cloudflare") {
+    return model || "@cf/moonshotai/kimi-k2.6";
   }
-  return process?.env?.PONTIS_MODEL || "mimo-v2.5-free";
+  return model || "mimo-v2.5-free";
 }
 
 export function resolveModel(model: string): string {
@@ -131,16 +135,13 @@ export function routeConfig(request: Request): RouteConfig {
 
 export function getUpstream(routeUpstream: string): string {
   return (
-    process?.env?.PONTIS_UPSTREAM_URL ||
+    getUpstreamUrl() ||
     routeUpstream
   );
 }
 
 export function upstreamFormat(): "openai" | "anthropic" | "openai-completions" {
-  const fmt = (
-    process?.env?.PONTIS_UPSTREAM_FORMAT ||
-    "openai"
-  ).toLowerCase();
+  const fmt = getUpstreamFormat();
 
   if (
     fmt === "openai-completions" ||
@@ -157,7 +158,7 @@ export function selectUpstream(
   routeUpstream: string,
   model: string,
 ): string {
-  const targetUpstream = process?.env?.PONTIS_UPSTREAM_URL;
+  const targetUpstream = getUpstreamUrl();
   if (targetUpstream) return targetUpstream;
 
   const path = new URL(request.url).pathname;
@@ -187,7 +188,7 @@ export function isCodexClient(request: Request, url: URL): boolean {
     url.searchParams.has("client_version") ||
     (request.headers.get("user-agent") || "").toLowerCase().includes("codex") ||
     (request.headers.get("user-agent") || "").toLowerCase().includes("openai") ||
-    process?.env?.PONTIS_CODEX_MODE === "true"
+    isCodexMode()
   );
 }
 
@@ -220,7 +221,7 @@ export function resolveModelAndUpstream(
   const key = extractApiKey(request.headers);
   let resolvedModel = model;
   const baseUpstream = getUpstream(routeUpstream);
-  const provider = process?.env?.PONTIS_PROVIDER?.toLowerCase();
+  const provider = getProvider();
 
   const isOpencode = baseUpstream.includes("opencode.ai") || provider === "opencode";
   const isCloudflare = baseUpstream.includes("gateway.ai.cloudflare.com") || provider === "cloudflare";
