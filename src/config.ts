@@ -6,6 +6,7 @@ import {
   isCodexMode,
 } from "./env";
 import { extractApiKey, validateApiKey } from "./auth";
+import { InvalidApiKeyError } from "./errors";
 
 export const GO_UPSTREAM = "https://opencode.ai/zen/go/v1";
 export const ZEN_UPSTREAM = "https://opencode.ai/zen/v1";
@@ -234,6 +235,13 @@ export function resolveModelAndUpstream(
   }
 
   const upstream = selectUpstream(request, routeUpstream, resolvedModel);
-  const authErr = (isOpencode || isCloudflare) ? validateApiKey(key) : null;
+  let authErr = null;
+  if (isOpencode) {
+    authErr = validateApiKey(key);
+  } else if (isCloudflare) {
+    if (!key) {
+      throw new InvalidApiKeyError("Missing API key. Provide x-api-key header.");
+    }
+  }
   return { model: resolvedModel, upstream, authErr };
 }

@@ -13,9 +13,11 @@ import { startProxy, killActiveProxy } from "./proxy-manager";
 import {
   launchClient,
   testConnectivity,
-  ensurePiInstalled,
+  ensureClientReady,
   setupPiProvider,
   cleanupPiProvider,
+  setupOpenCodeProvider,
+  cleanupOpenCodeProvider,
 } from "./client-launcher";
 import {
   getCloudflareConfigSaved,
@@ -24,6 +26,7 @@ import {
   CLOUDFLARE_FALLBACK_MODELS,
   type PontisEnv,
 } from "./config";
+import { type ClientName } from "./install-engine";
 
 export async function runInteractiveWizard(env: PontisEnv) {
   splash();
@@ -53,12 +56,14 @@ export async function runInteractiveWizard(env: PontisEnv) {
   }
 
   // Step 3: Pick client
-  const clientCmd = env.clientCmd || (await selectClientInteractive());
+  const clientCmd = (env.clientCmd || (await selectClientInteractive())) as ClientName | "server";
 
-  // Step 4: Client preparation (Pi-specific setup)
-  if (clientCmd === "pi") {
-    const piOk = await ensurePiInstalled();
-    if (!piOk) process.exit(1);
+  // Step 4: Ensure client is installed (generic — works for all clients)
+  if (clientCmd !== "server") {
+    const ready = await ensureClientReady(clientCmd, true);
+    if (!ready) {
+      error(`${clientCmd === "claude" ? "Claude Code" : clientCmd === "codex" ? "Codex" : clientCmd === "opencode" ? "OpenCode" : "Pi"} is required to continue.`);
+    }
   }
 
   // Step 5: Start proxy
@@ -68,10 +73,13 @@ export async function runInteractiveWizard(env: PontisEnv) {
   try {
     await startProxy(model, clientCmd === "codex");
 
-    // Step 6: Pi provider config (must be done after proxy is up)
+    // Step 6: Client-specific provider config (must be done after proxy is up)
     if (clientCmd === "pi") {
       setupPiProvider(apiKey, model);
       badge("muted", `Pi config: ~/.pi/agent/models.json (pontis provider)`);
+    } else if (clientCmd === "opencode") {
+      setupOpenCodeProvider(apiKey);
+      badge("muted", `OpenCode config: ~/.local/share/opencode/auth.json (pontis proxy)`);
     }
 
     // Step 7: Connectivity
@@ -84,6 +92,7 @@ export async function runInteractiveWizard(env: PontisEnv) {
     await launchClient(clientCmd, model, apiKey, []);
   } finally {
     if (clientCmd === "pi") cleanupPiProvider();
+    if (clientCmd === "opencode") cleanupOpenCodeProvider();
     killActiveProxy();
     process.removeAllListeners("SIGINT");
     process.removeAllListeners("SIGTERM");
@@ -169,7 +178,9 @@ export async function runWithConfig(
         ? "Server"
         : clientCmd === "pi"
           ? "Pi"
-          : "Claude Code";
+          : clientCmd === "opencode"
+            ? "OpenCode"
+            : "Claude Code";
   kv("Mode", modeLabel);
   kv(
     "Provider",
@@ -183,9 +194,13 @@ export async function runWithConfig(
   if (upstreamUrl) kv("Upstream", upstreamUrl);
   console.log();
 
-  if (clientCmd === "pi") {
-    const piOk = await ensurePiInstalled();
-    if (!piOk) process.exit(1);
+  // Ensure client is installed before launching
+  if (clientCmd !== "server") {
+    const autoInstall = opts.install !== false && process.env.PONTIS_AUTO_INSTALL !== "false";
+    const ready = await ensureClientReady(clientCmd as any, autoInstall);
+    if (!ready) {
+      error(`${modeLabel} is required to continue. Install it or pass --no-install to skip this check.`);
+    }
   }
 
   try {
@@ -193,6 +208,8 @@ export async function runWithConfig(
 
     if (clientCmd === "pi") {
       setupPiProvider(apiKey, model);
+    } else if (clientCmd === "opencode") {
+      setupOpenCodeProvider(apiKey);
     }
 
     const ok = await testConnectivity(apiKey, model);
@@ -200,6 +217,7 @@ export async function runWithConfig(
     await launchClient(clientCmd, model, apiKey, extraArgs);
   } finally {
     if (clientCmd === "pi") cleanupPiProvider();
+    if (clientCmd === "opencode") cleanupOpenCodeProvider();
     killActiveProxy();
     process.removeAllListeners("SIGINT");
     process.removeAllListeners("SIGTERM");
