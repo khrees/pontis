@@ -1,7 +1,9 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { select, input, confirm, createSpinner, badge, section, splash } from "./ui";
-import { CACHE_FILE, FALLBACK_MODELS, getOpenCodeApiKey } from "./config";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { select, input, createSpinner, badge, section, splash, t } from "./ui";
+import { CACHE_FILE, FALLBACK_MODELS, LEGACY_KEY_FILE, getOpenCodeApiKey } from "./config";
 import { storeOpenCodeApiKey } from "../secure-storage";
+import { savePreferences } from "./preferences";
 
 export async function getOpenCodeApiKeyInteractive(): Promise<string> {
   if (process.env.OPENCODE_API_KEY) return process.env.OPENCODE_API_KEY;
@@ -10,21 +12,23 @@ export async function getOpenCodeApiKeyInteractive(): Promise<string> {
   const secureKey = getOpenCodeApiKey();
   if (secureKey) return secureKey;
 
-  section("OpenCode API Key");
+  section("OpenCode API Key Setup");
   console.log(
-    `  Get yours at https://opencode.ai/auth → Zen → API Keys\n`,
+    `  Get your free API key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys\n`,
   );
-  const key = await input("Paste your API key");
-  if (!key) {
-    badge("error", "API key required.");
+  const key = await input("Paste your OpenCode API key", undefined, true);
+  if (!key || !key.trim()) {
+    badge("error", "API key is required to use OpenCode cloud models.");
     process.exit(1);
   }
-  const save = await confirm("Save this key for future use?", true);
-  if (save) {
-    storeOpenCodeApiKey(key.trim());
-    badge("success", "Key saved securely");
+
+  const cleanKey = key.trim();
+  storeOpenCodeApiKey(cleanKey);
+  if (existsSync(LEGACY_KEY_FILE)) {
+    try { unlinkSync(LEGACY_KEY_FILE); } catch {}
   }
-  return key.trim();
+  badge("success", "API key saved securely");
+  return cleanKey;
 }
 
 export async function checkModelOnline(
@@ -86,6 +90,7 @@ export async function fetchWorkingOpenCodeModels(apiKey: string): Promise<string
     );
     const working = results.filter(Boolean).map((_, i) => candidates[i]);
     if (working.length > 0) {
+      mkdirSync(dirname(CACHE_FILE), { recursive: true });
       writeFileSync(
         CACHE_FILE,
         JSON.stringify({ timestamp: Date.now(), models: working }),
@@ -116,17 +121,18 @@ export async function setupOpenCodeInteractive(): Promise<{
   );
   if (models.length === 0) models = FALLBACK_MODELS;
 
-  const result = await select("Pick a free model", models);
+  const result = await select("Pick a free model", models, { defaultIndex: 0 });
   let model: string;
   if (result.index === -1) {
-    model = await input("Enter model ID");
+    model = await input("Enter model ID", models[0]);
     if (!model) {
-      badge("error", "Model ID required.");
-      process.exit(1);
+      model = models[0];
     }
   } else {
     model = result.value;
   }
+
+  savePreferences({ defaultModel: model, defaultProvider: "opencode" });
 
   return { model, apiKey };
 }
@@ -137,14 +143,18 @@ export async function cmdUpdateKey(keyArg?: string) {
   let apiKey = keyArg;
   if (!apiKey) {
     console.log(
-      `  Get your key at https://opencode.ai/auth → Zen → API Keys\n`,
+      `  Get your key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys\n`,
     );
-    apiKey = await input("Paste your OpenCode API key");
+    apiKey = await input("Paste your OpenCode API key", undefined, true);
   }
-  if (!apiKey) {
+  if (!apiKey || !apiKey.trim()) {
     badge("error", "API key is required.");
     process.exit(1);
   }
-  storeOpenCodeApiKey(apiKey.trim());
-  badge("success", "Key saved securely");
+  const cleanKey = apiKey.trim();
+  storeOpenCodeApiKey(cleanKey);
+  if (existsSync(LEGACY_KEY_FILE)) {
+    try { unlinkSync(LEGACY_KEY_FILE); } catch {}
+  }
+  badge("success", "OpenCode API key saved securely");
 }

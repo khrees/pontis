@@ -17,14 +17,15 @@ export const ROOT = existsSync(join(dirname(dirname(__CLI_DIR)), "package.json")
   ? dirname(dirname(__CLI_DIR))
   : dirname(__CLI_DIR);
 
+export const PONTIS_DIR = join(homedir(), ".pontis");
+export const PROXY_LOG = join(PONTIS_DIR, "proxy.log");
+export const CACHE_FILE = join(PONTIS_DIR, "models_cache.json");
+export const DIST_PROXY = join(ROOT, "dist", "proxy.js");
+export const SRC_DIR = join(ROOT, "src");
+
 // Legacy file paths (for migration)
 export const LEGACY_KEY_FILE = join(homedir(), ".opencode_api_key");
 export const CLOUDFLARE_CONFIG_FILE = join(homedir(), ".cloudflare_gateway_config");
-export const CACHE_FILE = join(homedir(), ".pontis_models_cache.json");
-export const DIST_PROXY = join(ROOT, "dist", "proxy.js");
-export const SRC_DIR = join(ROOT, "src");
-export const PONTIS_DIR = join(homedir(), ".pontis");
-export const PROXY_LOG = join(PONTIS_DIR, "proxy.log");
 
 export const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
 export const PI_MODELS_FILE = join(PI_AGENT_DIR, "models.json");
@@ -104,19 +105,23 @@ export interface PontisEnv {
 }
 
 export function getCloudflareConfigSaved(): { apiToken?: string; accountId?: string; gatewayId?: string } {
-  // Try secure storage first
+  // Try secure storage first for the token
   const secureApiToken = retrieveCloudflareApiToken();
-  if (secureApiToken) {
-    return { apiToken: secureApiToken };
-  }
-  
-  // Fall back to legacy file
+
+  // Legacy file may have accountId, gatewayId, and potentially the token
+  let legacy: Record<string, string | undefined> = {};
   if (existsSync(CLOUDFLARE_CONFIG_FILE)) {
     try {
-      return JSON.parse(readFileSync(CLOUDFLARE_CONFIG_FILE, "utf-8"));
+      legacy = JSON.parse(readFileSync(CLOUDFLARE_CONFIG_FILE, "utf-8"));
     } catch {}
   }
-  return {};
+
+  // Merge: prefer token from secure storage, take accountId/gatewayId from legacy
+  return {
+    apiToken: secureApiToken || legacy.apiToken,
+    accountId: legacy.accountId,
+    gatewayId: legacy.gatewayId,
+  };
 }
 
 export function getLocalApiKey(): string {

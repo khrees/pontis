@@ -23,7 +23,6 @@ const crypto = cryptoModule && typeof cryptoModule.randomBytes === 'function' ? 
 const STORAGE_DIR = join(homedir(), '.pontis');
 const CREDENTIALS_FILE = join(STORAGE_DIR, 'credentials.enc');
 const SALT_FILE = join(STORAGE_DIR, '.salt');
-const KEY_FILE = join(STORAGE_DIR, '.key');
 
 // Ensure storage directory exists
 function ensureStorageDir(): void {
@@ -222,9 +221,11 @@ export function clearAllCredentials(): void {
   }
   
   if (existsSync(CREDENTIALS_FILE)) {
-    // Securely delete by overwriting with random data
-    const randomData = crypto.randomBytes(1024);
-    writeFileSync(CREDENTIALS_FILE, randomData.toString('hex'));
+    if (crypto) {
+      // Securely delete by overwriting with random data
+      const randomData = crypto.randomBytes(1024);
+      writeFileSync(CREDENTIALS_FILE, randomData.toString('hex'));
+    }
     // Then delete the file
     unlinkSync(CREDENTIALS_FILE);
   }
@@ -280,6 +281,10 @@ export function retrieveOpenCodeApiKey(): string | null {
   return retrieveCredential(CREDENTIAL_KEYS.OPENCODE_API_KEY);
 }
 
+export function deleteOpenCodeApiKey(): void {
+  deleteCredential(CREDENTIAL_KEYS.OPENCODE_API_KEY);
+}
+
 export function storeCloudflareApiToken(apiToken: string): void {
   storeCredential(CREDENTIAL_KEYS.CLOUDFLARE_API_TOKEN, apiToken);
 }
@@ -288,10 +293,18 @@ export function retrieveCloudflareApiToken(): string | null {
   return retrieveCredential(CREDENTIAL_KEYS.CLOUDFLARE_API_TOKEN);
 }
 
+export function deleteCloudflareApiToken(): void {
+  deleteCredential(CREDENTIAL_KEYS.CLOUDFLARE_API_TOKEN);
+}
+
 export function storeLocalApiKey(apiKey: string): void {
   storeCredential(CREDENTIAL_KEYS.LOCAL_API_KEY, apiKey);
 }
 
 export function retrieveLocalApiKey(): string | null {
   return retrieveCredential(CREDENTIAL_KEYS.LOCAL_API_KEY);
+}
+
+export function deleteLocalApiKey(): void {
+  deleteCredential(CREDENTIAL_KEYS.LOCAL_API_KEY);
 }

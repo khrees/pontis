@@ -67,11 +67,25 @@ export async function handleResponsesRequest(
   reqId: string,
 ): Promise<Response> {
   return wrapProxyRequest(reqId, async () => {
-    const key = extractApiKey(request.headers);
+    const requestKey = extractApiKey(request.headers);
+
+    // When Codex traffic is redirected from api.openai.com → localhost via
+    // pf/hosts, Codex sends its stored OpenAI key (sk-...). Override with
+    // the OpenCode key from the environment so the upstream accepts it.
+    const key = (requestKey && requestKey.startsWith("sk-") && process.env.OPENAI_API_KEY)
+      ? process.env.OPENAI_API_KEY
+      : requestKey;
+
     const req = (await request.json()) as ResponsesApiRequest;
     const originalModel = req.model || "gpt-5.4-mini";
 
+    // Strip provider prefix from model name (e.g. "pontis/hy3-free" → "hy3-free")
+    // Codex passes the model as <provider>/<model> when using a custom model_provider.
     let resolvedModel = originalModel;
+    const slashIdx = resolvedModel.lastIndexOf("/");
+    if (slashIdx > 0) {
+      resolvedModel = resolvedModel.slice(slashIdx + 1);
+    }
     const baseUpstream = getUpstream(routeUpstream);
     if (baseUpstream.includes("opencode.ai")) {
       resolvedModel = resolveModel(resolvedModel);

@@ -1,4 +1,4 @@
-import { extractApiKey, validateApiKey, authErrorResponse } from "../auth";
+import { extractApiKey, validateApiKey } from "../auth";
 import {
   getDefaultFreeModel,
   getUpstream,
@@ -6,7 +6,7 @@ import {
   upstreamFormat,
   type RouteConfig,
 } from "../config";
-import { fetchWithTimeout, anthropicHeaders, jsonResponse, upstreamErrorResponse } from "../http";
+import { fetchWithTimeout, anthropicHeaders, jsonResponse } from "../http";
 import {
   buildCodexModelEntry,
   KNOWN_MODEL_METADATA,

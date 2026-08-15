@@ -1,11 +1,11 @@
 {
   "name": "pontis",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "npx wrangler dev",
-    "deploy": "npx wrangler deploy",
-    "build": "npm run build:proxy && npm run build:cli",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "bun run build:proxy && bun run build:cli",
     "build:proxy": "esbuild src/local-server.ts --bundle --platform=node --target=node18 --outfile=dist/proxy.js",
     "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/cli.mjs",
     "test": "vitest run",
@@ -14,6 +14,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260504.1",
     "@types/node": "^25.9.3",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.25.0",
     "pkg": "^5.8.1",
     "typescript": "^6.0.3",
@@ -21,7 +22,7 @@
     "wrangler": "^4.87.0"
   },
   "license": "MIT",
-  "description": "A bidirectional translation proxy bridging Anthropic and OpenAI API formats to run Claude Code, Codex CLI, and other terminal-based AI harnesses using local models or OpenCode.",
+  "description": "Universal AI gateway and runtime launcher bridging Claude Code, Codex CLI, OpenCode, Pi, Cloudflare Workers AI, and local LLMs with bidirectional protocol translation (Anthropic, OpenAI Chat, Responses API, and Completions).",
   "dependencies": {
     "@hono/node-server": "^2.0.5",
     "chalk": "^5.6.2",

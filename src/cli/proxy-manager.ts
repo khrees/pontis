@@ -1,10 +1,11 @@
 import { spawn, execSync } from "node:child_process";
 import { existsSync, readdirSync, statSync, mkdirSync, createWriteStream } from "node:fs";
 import { join } from "node:path";
-import { select, input, createSpinner, badge, section, t } from "./ui";
+import { createSpinner, t } from "./ui";
 import { DIST_PROXY, SRC_DIR, ROOT, PONTIS_DIR, PROXY_LOG } from "./config";
+import { getPort } from "../env";
 
-export const PORT = 8787;
+export const PORT = getPort(8787);
 export const PROXY_URL = `http://localhost:${PORT}`;
 
 /** Tracked proxy PID so SIGINT/SIGTERM can clean it up. */
@@ -100,7 +101,10 @@ export async function startProxy(model: string, codexMode: boolean): Promise<num
     }
   } catch {}
 
-  if (codexMode) process.env.PONTIS_CODEX_MODE = "true";
+  if (codexMode) {
+    process.env.PONTIS_CODEX_MODE = "true";
+    process.env.PONTIS_TLS_PORT = "8443";
+  }
   if (!codexMode && process.env.PONTIS_PROVIDER === "local") {
     process.env.PONTIS_MIN_KEY_LENGTH = "0";
   }

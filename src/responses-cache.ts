@@ -6,6 +6,7 @@
  */
 
 import type { ResponsesApiUsage } from "./types";
+import { getCacheMaxTurns, getCacheTtlMs } from "./env";
 
 export interface CachedTurn {
   responseId: string;
@@ -20,8 +21,8 @@ export class ResponsesCache {
   private cache = new Map<string, CachedTurn>();
 
   constructor(
-    private readonly maxSize = 50,
-    private readonly ttlMs = 5 * 60 * 1000,
+    private readonly maxSize = getCacheMaxTurns(50),
+    private readonly ttlMs = getCacheTtlMs(5 * 60 * 1000),
   ) {}
 
   get(id: string): CachedTurn | undefined {

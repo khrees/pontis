@@ -12,7 +12,8 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { badge, confirm, createSpinner } from "./ui";
+import { badge, confirm, createSpinner, section, kv, t, outputJson, select } from "./ui";
+import { getPreferences, savePreferences } from "./preferences";
 
 // ──────────────────────────────────────────────
 //  Types
@@ -23,6 +24,8 @@ export type ClientName = "claude" | "codex" | "opencode" | "pi";
 export interface ClientDef {
   /** Display name (e.g. "Claude Code") */
   name: string;
+  /** Short description */
+  description: string;
   /** Binary name on PATH (e.g. "claude") */
   binary: string;
   /** Official curl-pipe installer URL, or null for npm-only tools */
@@ -46,6 +49,7 @@ export interface ClientDef {
 export const CLIENTS: Record<ClientName, ClientDef> = {
   claude: {
     name: "Claude Code",
+    description: "Anthropic's official AI coding assistant",
     binary: "claude",
     installScript: "https://claude.ai/install.sh",
     minNodeVersion: null, // ships native binary via the installer
@@ -54,6 +58,7 @@ export const CLIENTS: Record<ClientName, ClientDef> = {
   },
   codex: {
     name: "Codex CLI",
+    description: "OpenAI's terminal coding agent",
     binary: "codex",
     installScript: "https://chatgpt.com/codex/install.sh",
     minNodeVersion: null,
@@ -62,6 +67,7 @@ export const CLIENTS: Record<ClientName, ClientDef> = {
   },
   opencode: {
     name: "OpenCode",
+    description: "Open-source terminal AI coding assistant (opencode.ai)",
     binary: "opencode",
     installScript: "https://opencode.ai/install",
     minNodeVersion: null,
@@ -71,6 +77,7 @@ export const CLIENTS: Record<ClientName, ClientDef> = {
   },
   pi: {
     name: "Pi",
+    description: "The Pi coding agent (pi.dev)",
     binary: "pi",
     installScript: null, // npm-only
     npmPackage: "@earendil-works/pi-coding-agent",
@@ -91,8 +98,69 @@ export const CLIENTS_WITH_INSTALL_SCRIPT: ClientName[] = [
 ];
 
 // ──────────────────────────────────────────────
-//  Detection
+//  Detection & Resolution
 // ──────────────────────────────────────────────
+
+/**
+ * Resolve a client binary path. Checks PATH first, then
+ * falls back to ~/.pontis/clients/<name>/bin/<binary> for
+ * Pontis-managed installations.
+ */
+export function resolveClientBinary(name: ClientName): string {
+  try {
+    const resolved = execSync(`which "${name}" 2>/dev/null || command -v "${name}" 2>/dev/null`, {
+      encoding: "utf-8",
+    }).trim();
+    if (resolved) return resolved;
+  } catch {
+    // not found on PATH
+  }
+  // Fallback: Pontis-managed install under ~/.pontis/clients
+  const local = join(homedir(), ".pontis", "clients", name, "bin", name);
+  if (existsSync(local)) return local;
+  // npm --prefix layout: node_modules/.bin/
+  const npmBin = join(homedir(), ".pontis", "clients", name, "node_modules", ".bin", name);
+  if (existsSync(npmBin)) return npmBin;
+  // Last resort: trust the shell to find it
+  return name;
+}
+
+/**
+ * Get the full filesystem path for a client binary if installed.
+ */
+export function getClientPath(name: ClientName): string | null {
+  if (!isInstalled(name)) return null;
+  try {
+    const binary = resolveClientBinary(name);
+    if (existsSync(binary)) return binary;
+    const resolved = execSync(`which "${binary}" 2>/dev/null || command -v "${binary}" 2>/dev/null`, {
+      encoding: "utf-8",
+    }).trim();
+    return resolved || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Attempt to detect the installed version of a client.
+ */
+export function getClientVersion(name: ClientName): string | null {
+  if (!isInstalled(name)) return null;
+  const binary = resolveClientBinary(name);
+  try {
+    const output = execSync(`"${binary}" --version 2>&1`, {
+      timeout: 1500,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!output) return null;
+    const match = output.match(/(\d+\.\d+(\.\d+)?(-[a-zA-Z0-9.]+)?)/);
+    return match ? `v${match[1]}` : output.split("\n")[0].slice(0, 20);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Check if a binary is available on PATH.
@@ -122,7 +190,7 @@ export function isInstalled(name: ClientName): boolean {
       return false;
     }
   }
-  return binaryOnPath(def.binary);
+  return binaryOnPath(def.binary) || existsSync(join(homedir(), ".pontis", "clients", name, "bin", def.binary)) || existsSync(join(homedir(), ".pontis", "clients", name, "node_modules", ".bin", def.binary));
 }
 
 /**
@@ -134,6 +202,50 @@ export function checkAll(): Record<ClientName, boolean> {
     result[name] = isInstalled(name);
   }
   return result;
+}
+
+export interface ClientInfo {
+  name: ClientName;
+  displayName: string;
+  description: string;
+  binary: string;
+  installed: boolean;
+  version: string | null;
+  path: string | null;
+  minNodeVersion: string | null;
+  nodeIssue: string | null;
+  installHint: string;
+}
+
+/**
+ * Get comprehensive info for a client.
+ */
+export function getClientInfo(name: ClientName): ClientInfo {
+  const def = CLIENTS[name];
+  const installed = isInstalled(name);
+  const nodeIssue = checkNodeVersion(name);
+  const version = installed ? getClientVersion(name) : null;
+  const path = installed ? getClientPath(name) : null;
+
+  return {
+    name,
+    displayName: def.name,
+    description: def.description,
+    binary: def.binary,
+    installed,
+    version,
+    path,
+    minNodeVersion: def.minNodeVersion,
+    nodeIssue,
+    installHint: def.installHint,
+  };
+}
+
+/**
+ * Get comprehensive info for all supported clients.
+ */
+export function getAllClientsInfo(): ClientInfo[] {
+  return ALL_CLIENTS.map((name) => getClientInfo(name));
 }
 
 // ──────────────────────────────────────────────
@@ -325,5 +437,140 @@ export async function ensureClientInstalled(
       badge("muted", e.hint);
     }
     return false;
+  }
+}
+
+/**
+ * Display comprehensive list of all supported clients and their installation status.
+ */
+export function cmdClientsList(opts?: { json?: boolean }): void {
+  const prefs = getPreferences();
+  const defaultClient = prefs.defaultClient || "claude";
+  const clients = getAllClientsInfo();
+
+  if (opts?.json) {
+    outputJson({
+      defaultClient,
+      clients: clients.map((c) => ({
+        name: c.name,
+        displayName: c.displayName,
+        description: c.description,
+        installed: c.installed,
+        version: c.version,
+        path: c.path,
+        isDefault: c.name === defaultClient,
+        nodeIssue: c.nodeIssue,
+        installHint: c.installHint,
+      })),
+    });
+  }
+
+  section("Supported Coding Agent CLIs");
+
+  for (const c of clients) {
+    const isDef = c.name === defaultClient;
+    const defBadge = isDef ? `  ${t.success("★ Default")}` : "";
+
+    let statusText: string;
+    if (c.installed) {
+      const ver = c.version ? ` (${c.version})` : "";
+      statusText = `${t.success("✓ Installed")}${ver}`;
+    } else if (c.nodeIssue) {
+      statusText = t.warning(`⚠ ${c.nodeIssue}`);
+    } else {
+      statusText = t.muted("○ Not installed");
+    }
+
+    console.log(`  ${t.primary(t.bold(c.displayName))}${defBadge}`);
+    console.log(`    ${t.muted("Status:")}       ${statusText}`);
+    if (c.path) {
+      console.log(`    ${t.muted("Path:")}         ${t.muted(c.path)}`);
+    }
+    console.log(`    ${t.muted("Description:")}  ${c.description}`);
+    if (c.installed) {
+      console.log(`    ${t.muted("Run:")}          ${t.secondary(`pontis ${c.name}`)}`);
+    } else {
+      console.log(`    ${t.muted("Install:")}      ${t.accent(`pontis install ${c.name}`)}`);
+    }
+    console.log();
+  }
+
+  badge("muted", "Quick start: pontis <client> (e.g. pontis claude)");
+  badge("muted", "Set default: pontis clients default <client>");
+  console.log();
+}
+
+/**
+ * Set the default client to launch with `pontis`.
+ */
+export function cmdClientsDefault(clientName: string): void {
+  const normalized = clientName.toLowerCase().trim() as ClientName | "server";
+  if (normalized !== "server" && !ALL_CLIENTS.includes(normalized as ClientName)) {
+    badge("error", `Unknown client "${clientName}". Valid: ${ALL_CLIENTS.join(", ")}, server`);
+    process.exit(1);
+  }
+
+  savePreferences({ defaultClient: normalized });
+  const displayName = normalized === "server" ? "Server Mode" : CLIENTS[normalized as ClientName]?.name;
+  badge("success", `Default client set to ${t.primary(displayName)}`);
+}
+
+/**
+ * Interactive client manager.
+ */
+export async function cmdClientsInteractive(): Promise<void> {
+  const prefs = getPreferences();
+  const defaultClient = prefs.defaultClient || "claude";
+  const clients = getAllClientsInfo();
+
+  section("Coding Agent CLIs");
+  for (const c of clients) {
+    const isDef = c.name === defaultClient ? " ★" : "";
+    const status = c.installed
+      ? t.success(`✓ Installed${c.version ? ` (${c.version})` : ""}`)
+      : t.muted("○ Not installed");
+    kv(`${c.displayName}${isDef}`, status);
+  }
+  console.log();
+
+  const missing = clients.filter((c) => !c.installed);
+
+  const choices = [
+    `${t.primary("View detailed client information")}`,
+    `${t.primary("Set default launch client")}`,
+    ...(missing.length > 0
+      ? [`${t.primary("Install missing client(s)")}`]
+      : []),
+    `${t.muted("Back")}`,
+  ];
+
+  const res = await select("Choose an action", choices, { allowCustom: false, defaultIndex: 0 });
+
+  if (res.index === 0) {
+    cmdClientsList();
+  } else if (res.index === 1) {
+    const clientChoices = ALL_CLIENTS.map((name) => {
+      const def = CLIENTS[name];
+      const isDef = name === defaultClient ? " (current default)" : "";
+      return `${def.name}${isDef}`;
+    });
+    clientChoices.push("Server Mode (Proxy only)");
+
+    const clientRes = await select("Choose default client", clientChoices, { allowCustom: false, defaultIndex: 0 });
+    const selectedName = clientRes.index === ALL_CLIENTS.length ? "server" : ALL_CLIENTS[clientRes.index];
+    cmdClientsDefault(selectedName);
+  } else if (res.index === 2 && missing.length > 0) {
+    const installChoices = missing.map((c) => `Install ${c.displayName}`);
+    if (missing.length > 1) installChoices.push("Install all missing");
+    installChoices.push("Cancel");
+
+    const installRes = await select("Select client to install", installChoices, { allowCustom: false });
+    if (installRes.index < missing.length) {
+      await installClient(missing[installRes.index].name, { interactive: false });
+    } else if (installRes.index === missing.length && missing.length > 1) {
+      for (const m of missing) {
+        await installClient(m.name, { interactive: false });
+      }
+    }
   }
 }

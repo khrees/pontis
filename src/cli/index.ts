@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Pontis CLI — entrypoint routing requests to provider setup subfiles.
+ * Pontis CLI — entrypoint routing requests to client launchers, providers, auth, and preferences.
  */
 
 import { Command } from "commander";
@@ -28,7 +28,7 @@ import {
   VERSION,
   createSpinner,
 } from "./ui";
-import { cmdUpdateKey, fetchWorkingOpenCodeModels } from "./provider-opencode";
+import { fetchWorkingOpenCodeModels } from "./provider-opencode";
 import { fetchLocalModels } from "./provider-local";
 import { fetchCloudflareModels } from "./provider-cloudflare";
 import { PORT, PROXY_URL } from "./proxy-manager";
@@ -38,9 +38,25 @@ import {
   isInstalled,
   checkAll,
   installClient,
-  checkNodeVersion,
   type ClientName,
+  cmdClientsList,
+  cmdClientsDefault,
+  cmdClientsInteractive,
+  getAllClientsInfo,
 } from "./install-engine";
+import {
+  cmdAuthStatus,
+  cmdAuthSet,
+  cmdAuthRemove,
+  cmdAuthClear,
+  cmdAuthInteractive,
+} from "./auth";
+import {
+  getPreferences,
+  savePreferences,
+  resetPreferences,
+} from "./preferences";
+import { isHostsEntryActive, isPfRuleActive } from "./codex-redirect";
 
 const program = new Command();
 
@@ -48,7 +64,7 @@ program
   .name("pontis")
   .version(VERSION)
   .description(
-    "Translation proxy bridging Anthropic/OpenAI formats to run Claude Code, Codex, Pi, OpenCode, and local models",
+    "Universal AI gateway & runtime launcher bridging Claude Code, Codex CLI, OpenCode, Pi, Cloudflare Workers AI, and local LLMs",
   )
   .option("--json", "Output in JSON format (for scripting)");
 
@@ -72,11 +88,15 @@ function addPontisOptions(cmd: Command) {
     );
 }
 
+// ──────────────────────────────────────────────
+//  Client Subcommands (Direct Launchers)
+// ──────────────────────────────────────────────
+
 // Subcommand: claude
 addPontisOptions(
   program
     .command("claude")
-    .description("Start proxy and launch Claude Code with a configured model")
+    .description("Start proxy and launch Claude Code with configured model")
     .allowUnknownOption(true)
     .allowExcessArguments(true),
 ).action((opts) => {
@@ -90,7 +110,7 @@ addPontisOptions(
 addPontisOptions(
   program
     .command("codex")
-    .description("Start proxy and launch Codex with a configured model")
+    .description("Start proxy and launch Codex CLI with configured model")
     .allowUnknownOption(true)
     .allowExcessArguments(true),
 ).action((opts) => {
@@ -104,7 +124,7 @@ addPontisOptions(
 addPontisOptions(
   program
     .command("opencode")
-    .description("Start proxy and launch OpenCode with a configured model")
+    .description("Start proxy and launch OpenCode with configured model")
     .allowUnknownOption(true)
     .allowExcessArguments(true),
 ).action((opts) => {
@@ -118,7 +138,7 @@ addPontisOptions(
 addPontisOptions(
   program
     .command("pi")
-    .description("Start proxy and launch Pi coding agent with a configured model")
+    .description("Start proxy and launch Pi coding agent with configured model")
     .allowUnknownOption(true)
     .allowExcessArguments(true),
 ).action((opts) => {
@@ -140,7 +160,132 @@ addPontisOptions(
   });
 });
 
-// Subcommand: install — manage client tool installations
+// ──────────────────────────────────────────────
+//  Authentication Management
+// ──────────────────────────────────────────────
+
+const authCmd = program
+  .command("auth")
+  .description("Manage provider API keys and credentials")
+  .action(async () => {
+    await cmdAuthInteractive();
+  });
+
+authCmd
+  .command("list")
+  .alias("status")
+  .description("List saved authentication credentials and keys")
+  .option("--json", "Output in JSON format")
+  .action((opts) => {
+    cmdAuthStatus(opts);
+  });
+
+authCmd
+  .command("set [provider] [key]")
+  .alias("add")
+  .description("Add or update API key for a provider (opencode, cloudflare, local)")
+  .action(async (provider, key) => {
+    await cmdAuthSet(provider, key);
+  });
+
+authCmd
+  .command("remove [provider]")
+  .alias("delete")
+  .description("Remove credentials for a provider (opencode, cloudflare, local, all)")
+  .action(async (provider) => {
+    await cmdAuthRemove(provider);
+  });
+
+authCmd
+  .command("clear")
+  .description("Clear all saved API keys and credentials")
+  .action(async () => {
+    await cmdAuthClear();
+  });
+
+// Aliases for auth
+program
+  .command("login [provider] [key]")
+  .description("Log in / set API key for a provider")
+  .action(async (provider, key) => {
+    await cmdAuthSet(provider, key);
+  });
+
+program
+  .command("logout [provider]")
+  .description("Remove saved API key / credentials for a provider")
+  .action(async (provider) => {
+    await cmdAuthRemove(provider);
+  });
+
+program
+  .command("update-key [key]")
+  .description("Update OpenCode API key (alias to: pontis auth set opencode)")
+  .action(async (key) => {
+    await cmdAuthSet("opencode", key);
+  });
+
+program
+  .command("reset-cloudflare")
+  .description("Clear saved Cloudflare credentials (alias to: pontis auth remove cloudflare)")
+  .action(async () => {
+    await cmdAuthRemove("cloudflare");
+  });
+
+// ──────────────────────────────────────────────
+//  Clients Management & Listing
+// ──────────────────────────────────────────────
+
+const clientsCmd = program
+  .command("clients")
+  .description("List and manage coding agent CLIs (Claude, Codex, OpenCode, Pi)")
+  .action(async () => {
+    await cmdClientsInteractive();
+  });
+
+clientsCmd
+  .command("list")
+  .description("List all supported coding agent CLIs and installation status")
+  .option("--json", "Output in JSON format")
+  .action((opts) => {
+    cmdClientsList(opts);
+  });
+
+clientsCmd
+  .command("default <client>")
+  .description("Set the default coding agent CLI to launch with `pontis`")
+  .action((client) => {
+    cmdClientsDefault(client);
+  });
+
+clientsCmd
+  .command("install [clients...]")
+  .description("Install coding agent CLI tools")
+  .action(async (clients) => {
+    if (clients.length === 0) {
+      await cmdClientsInteractive();
+    } else {
+      const names = clients.includes("all") ? ALL_CLIENTS : (clients as ClientName[]);
+      for (const name of names) {
+        if (isInstalled(name)) {
+          badge("muted", `${CLIENTS[name]?.name || name} is already installed`);
+          continue;
+        }
+        await installClient(name, { interactive: false });
+      }
+    }
+  });
+
+// Top-level `pontis list` alias
+program
+  .command("list")
+  .description("List supported coding agent CLIs (alias to: pontis clients list)")
+  .option("--json", "Output in JSON format")
+  .action((opts) => {
+    cmdClientsList(opts);
+  });
+
+// Subcommand: install (for backward compatibility)
 program
   .command("install")
   .description("Install or check coding agent CLI tools")
@@ -150,34 +295,11 @@ program
   .option("--json", "Output in JSON format")
   .action(async (clients: string[], opts: { list?: boolean; check?: boolean; json?: boolean }) => {
     try {
-      // --list: show status of all clients
       if (opts.list) {
-        const status = checkAll();
-        if (opts.json || jsonMode) {
-          const result = ALL_CLIENTS.map((name) => ({
-            name,
-            displayName: CLIENTS[name].name,
-            installed: status[name],
-            binary: CLIENTS[name].binary,
-          }));
-          outputJson({ clients: result });
-        }
-        section("Installed Clients");
-        for (const name of ALL_CLIENTS) {
-          const def = CLIENTS[name];
-          if (status[name]) {
-            kv(def.name, t.success("installed"));
-          } else {
-            const nodeIssue = checkNodeVersion(name);
-            kv(def.name, nodeIssue ? t.warning(nodeIssue) : t.muted("not installed"));
-          }
-        }
-        console.log();
-        badge("muted", "Manage: pontis install <client>");
+        cmdClientsList(opts);
         return;
       }
 
-      // --check: exit code only
       if (opts.check) {
         const names = clients.length > 0
           ? (clients.includes("all") ? ALL_CLIENTS : clients as ClientName[])
@@ -189,7 +311,7 @@ program
             outputJsonError("missing_clients", `Missing: ${missing.join(", ")}`);
           }
           for (const name of missing) {
-            badge("error", `${CLIENTS[name as ClientName].name} is not installed`);
+            badge("error", `${CLIENTS[name as ClientName]?.name || name} is not installed`);
           }
           process.exit(1);
         }
@@ -200,16 +322,14 @@ program
         return;
       }
 
-      // Install specified clients (or prompt if none specified)
       const names = clients.length > 0
         ? (clients.includes("all") ? ALL_CLIENTS : clients as ClientName[])
         : null;
 
       if (names) {
-        // Non-interactive: install specified clients
         for (const name of names) {
           if (isInstalled(name)) {
-            badge("muted", `${CLIENTS[name].name} already installed — skipping`);
+            badge("muted", `${CLIENTS[name]?.name || name} already installed — skipping`);
             continue;
           }
           await installClient(name, { interactive: false });
@@ -219,33 +339,7 @@ program
           outputJson({ clients: names.map((n) => ({ name: n, installed: status[n] })) });
         }
       } else {
-        // Interactive: let user choose
-        const { select } = await import("./ui");
-        const choices = ALL_CLIENTS.map((name) => {
-          const def = CLIENTS[name];
-          const installed = isInstalled(name);
-          const suffix = installed ? t.success(" ✓ installed") : t.muted(" not installed");
-          return `${t.primary(def.name)}${suffix}` as string;
-        });
-        choices.push(`${t.primary("All")}     ${t.muted("Install all missing clients")}` as string);
-        choices.push(`${t.muted("Cancel")}` as string);
-
-        const result = await select("Which client(s) would you like to install?", choices);
-        if (result.index === ALL_CLIENTS.length) {
-          // "All"
-          for (const name of ALL_CLIENTS) {
-            if (!isInstalled(name)) {
-              await installClient(name, { interactive: true });
-            }
-          }
-        } else if (result.index < ALL_CLIENTS.length) {
-          const name = ALL_CLIENTS[result.index];
-          if (!isInstalled(name)) {
-            await installClient(name, { interactive: true });
-          } else {
-            badge("muted", `${CLIENTS[name].name} is already installed`);
-          }
-        }
+        await cmdClientsInteractive();
       }
     } catch (e: any) {
       if (jsonMode) outputJsonError("install_failed", e.message || String(e));
@@ -254,19 +348,61 @@ program
     }
   });
 
-// Subcommand: update-key
-program
-  .command("update-key")
-  .description("Save a new OpenCode API key")
-  .argument("[key]", "New API key (prompts if omitted)")
-  .action((key) => {
-    cmdUpdateKey(key).catch((e) => {
-      console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
-      process.exit(1);
-    });
+// ──────────────────────────────────────────────
+//  User Preferences & Configuration
+// ──────────────────────────────────────────────
+
+const configCmd = program
+  .command("config")
+  .description("View and manage Pontis preferences (default client, provider, model)")
+  .action(() => {
+    const prefs = getPreferences();
+    section("Pontis Preferences");
+    kv("Default Client", t.primary(prefs.defaultClient || "claude"));
+    kv("Default Provider", t.primary(prefs.defaultProvider || "opencode"));
+    kv("Default Model", t.primary(prefs.defaultModel || "(provider default)"));
+    if (prefs.localEndpoint) kv("Local Endpoint", t.muted(prefs.localEndpoint));
+    console.log();
+    badge("muted", "Set value: pontis config set <key> <value>");
+    badge("muted", "Keys: client | provider | model | endpoint");
+    console.log();
   });
 
-// Subcommand: models — list available models
+configCmd
+  .command("set <key> <value>")
+  .description("Set a preference value (e.g. pontis config set model deepseek-v4-flash-free)")
+  .action((key, value) => {
+    const normKey = key.toLowerCase().trim();
+    if (normKey === "client") {
+      savePreferences({ defaultClient: value.toLowerCase() as ClientName | "server" });
+      badge("success", `Default client set to "${value}"`);
+    } else if (normKey === "provider") {
+      savePreferences({ defaultProvider: value.toLowerCase() as any });
+      badge("success", `Default provider set to "${value}"`);
+    } else if (normKey === "model") {
+      savePreferences({ defaultModel: value });
+      badge("success", `Default model set to "${value}"`);
+    } else if (normKey === "endpoint") {
+      savePreferences({ localEndpoint: value });
+      badge("success", `Local endpoint set to "${value}"`);
+    } else {
+      badge("error", `Unknown config key "${key}". Valid keys: client, provider, model, endpoint`);
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("reset")
+  .description("Reset all user preferences to defaults")
+  .action(() => {
+    resetPreferences();
+    badge("success", "Preferences reset to defaults");
+  });
+
+// ──────────────────────────────────────────────
+//  Models Discovery
+// ──────────────────────────────────────────────
+
 program
   .command("models")
   .description("List available models from the configured provider")
@@ -274,12 +410,14 @@ program
   .option("-u, --upstream <url>", "Upstream endpoint URL")
   .action(async (opts) => {
     try {
+      const prefs = getPreferences();
       const provider: "opencode" | "local" | "cloudflare" =
         opts.provider ||
         (process.env.PONTIS_PROVIDER as "opencode" | "local" | "cloudflare") ||
+        prefs.defaultProvider ||
         (process.env.PONTIS_UPSTREAM_URL ? "local" : "opencode");
 
-      let upstreamUrl = opts.upstream || process.env.PONTIS_UPSTREAM_URL;
+      let upstreamUrl = opts.upstream || process.env.PONTIS_UPSTREAM_URL || (provider === "local" ? prefs.localEndpoint : undefined);
 
       if (provider === "cloudflare") {
         const savedCf = getCloudflareConfigSaved();
@@ -289,7 +427,7 @@ program
           process.env.CLOUDFLARE_ACCOUNT_ID || savedCf.accountId;
         if (!apiToken || !accountId) {
           const msg =
-            "Cloudflare API Token and Account ID are required. Run interactive setup or set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.";
+            "Cloudflare API Token and Account ID are required. Run: pontis auth set cloudflare";
           if (jsonMode) outputJsonError("missing_cloudflare_config", msg);
           badge("error", msg);
           process.exit(1);
@@ -320,7 +458,7 @@ program
             "No models found. Check your API key and Account ID.",
           );
         } else {
-          section("Available Models");
+          section("Available Cloudflare Models");
           for (const m of models) kv("Model", t.primary(m));
         }
       } else if (provider === "opencode") {
@@ -329,11 +467,11 @@ program
           if (jsonMode)
             outputJsonError(
               "missing_api_key",
-              "No OpenCode API key found. Set OPENCODE_API_KEY or run: pontis update-key",
+              "No OpenCode API key found. Set OPENCODE_API_KEY or run: pontis auth set opencode",
             );
           badge(
             "error",
-            "No OpenCode API key found. Set OPENCODE_API_KEY or run: pontis update-key",
+            "No OpenCode API key found. Run: pontis auth set opencode",
           );
           process.exit(1);
         }
@@ -346,7 +484,7 @@ program
             models.length > 0
               ? {
                   type: "success",
-                  text: `Found ${models.length} model${models.length === 1 ? "" : "s"}`,
+                  text: `${models.length} model${models.length === 1 ? "" : "s"} available`,
                 }
               : { type: "warning", text: "No models found" },
           );
@@ -359,21 +497,12 @@ program
         if (models.length === 0) {
           badge("warning", "No models found. Check your API key.");
         } else {
-          section("Available Models");
+          section("Available OpenCode Models");
           for (const m of models) kv("Model", t.primary(m));
         }
       } else {
         if (!upstreamUrl) {
-          if (jsonMode)
-            outputJsonError(
-              "missing_upstream",
-              "Set --upstream or PONTIS_UPSTREAM_URL for local provider",
-            );
-          badge(
-            "error",
-            "Set --upstream or PONTIS_UPSTREAM_URL for local provider",
-          );
-          process.exit(1);
+          upstreamUrl = "http://localhost:11434/v1";
         }
         const apiKey =
           process.env.LOCAL_API_KEY || process.env.OPENAI_API_KEY || "";
@@ -398,9 +527,9 @@ program
           });
         }
         if (models.length === 0) {
-          badge("warning", "No models returned from upstream. Is it running?");
+          badge("warning", "No models returned from upstream. Is your local engine running?");
         } else {
-          section("Available Models");
+          section("Available Local Models");
           for (const m of models) kv("Model", t.primary(m));
         }
       }
@@ -411,16 +540,18 @@ program
     }
   });
 
-// Subcommand: status — show proxy and configuration status
+// ──────────────────────────────────────────────
+//  Status Subcommand
+// ──────────────────────────────────────────────
+
 program
   .command("status")
-  .description("Show current proxy and configuration status")
+  .description("Show current proxy, configuration, authentication, and client status")
   .action(async () => {
     try {
       let proxyRunning = false;
-      let proxyPort = PORT;
+      const proxyPort = PORT;
 
-      // Check if proxy is running by hitting the root endpoint
       try {
         const res = await fetch(PROXY_URL + "/", {
           signal: AbortSignal.timeout(2000),
@@ -428,16 +559,20 @@ program
         if (res.ok) proxyRunning = true;
       } catch {}
 
+      const prefs = getPreferences();
       const provider: string =
         process.env.PONTIS_PROVIDER ||
+        prefs.defaultProvider ||
         (process.env.PONTIS_UPSTREAM_URL ? "local" : "opencode");
       const model =
         process.env.PONTIS_MODEL ||
+        prefs.defaultModel ||
         (provider === "cloudflare"
           ? CLOUDFLARE_FALLBACK_MODELS[0]
           : FALLBACK_MODELS[0]);
       const upstream =
         process.env.PONTIS_UPSTREAM_URL ||
+        prefs.localEndpoint ||
         (provider === "cloudflare"
           ? "(Cloudflare AI Gateway)"
           : "(default OpenCode Zen)");
@@ -448,8 +583,7 @@ program
           ? existsSync(CLOUDFLARE_CONFIG_FILE)
           : getOpenCodeApiKey() !== null;
 
-      // Check client installations
-      const clientStatus = checkAll();
+      const clients = getAllClientsInfo();
 
       if (jsonMode) {
         outputJson({
@@ -461,9 +595,13 @@ program
           debug,
           apiKeySaved: keyExists,
           logs: PROXY_LOG,
-          clients: ALL_CLIENTS.map((n) => ({
-            name: n,
-            installed: clientStatus[n],
+          preferences: prefs,
+          clients: clients.map((c) => ({
+            name: c.name,
+            displayName: c.displayName,
+            installed: c.installed,
+            version: c.version,
+            path: c.path,
           })),
         });
       }
@@ -475,32 +613,48 @@ program
       } else {
         badge(
           "warning",
-          `Proxy not running (start with: ${t.secondary("pontis server")})`,
+          `Proxy not running (starts automatically on client launch or: ${t.secondary("pontis server")})`,
         );
       }
 
       console.log();
-      section("Configuration");
+      section("Active Configuration");
+      kv("Default Client", t.primary(prefs.defaultClient || "claude"));
       kv("Provider", t.primary(provider));
       kv("Model", t.primary(model));
       kv("Upstream", t.muted(upstream));
       kv("Format", format);
-      kv("Debug", debug ? t.success("on") : t.muted("off"));
       kv("API Key", keyExists ? t.success("saved") : t.warning("not found"));
+      kv("Debug", debug ? t.success("on") : t.muted("off"));
       kv("Logs", t.muted(PROXY_LOG));
+
+      const hostsActive = isHostsEntryActive();
+      const pfActive = isPfRuleActive();
+      if (hostsActive || pfActive) {
+        console.log();
+        section("Codex Network Redirect");
+        kv("Hosts entry", hostsActive ? t.warning("active") : t.muted("inactive"));
+        kv("pf rule", pfActive ? t.warning("active") : t.muted("inactive"));
+        badge("info", "Stale redirect rules may break codex login");
+        badge("muted", "Clean up: sudo pontis cleanup-redirect");
+      }
       console.log();
 
-      section("Installed Clients");
-      for (const name of ALL_CLIENTS) {
-        const def = CLIENTS[name];
-        if (clientStatus[name]) {
-          kv(def.name, t.success("installed"));
+      section("Supported Coding Agent CLIs");
+      for (const c of clients) {
+        const isDef = c.name === (prefs.defaultClient || "claude") ? " ★" : "";
+        if (c.installed) {
+          const ver = c.version ? ` (${c.version})` : "";
+          kv(`${c.displayName}${isDef}`, `${t.success("installed")}${t.muted(ver)}`);
+        } else if (c.nodeIssue) {
+          kv(`${c.displayName}${isDef}`, t.warning(c.nodeIssue));
         } else {
-          kv(def.name, t.muted("not installed"));
+          kv(`${c.displayName}${isDef}`, t.muted("not installed"));
         }
       }
       console.log();
-      badge("muted", "Manage: pontis install <client>");
+      badge("muted", "Manage clients: pontis clients");
+      badge("muted", "Manage keys:    pontis auth");
       console.log();
     } catch (e: any) {
       if (jsonMode) outputJsonError("status_failed", e.message || String(e));
@@ -509,7 +663,40 @@ program
     }
   });
 
-// Default (no subcommand): interactive wizard
+// Subcommand: cleanup-redirect — remove stale Codex redirect rules
+program
+  .command("cleanup-redirect")
+  .description("Remove stale /etc/hosts entry and pf rule for api.openai.com")
+  .action(async () => {
+    try {
+      const hostsActive = isHostsEntryActive();
+      const pfActive = isPfRuleActive();
+
+      if (!hostsActive && !pfActive) {
+        badge("info", "No stale redirect rules found — nothing to clean up.");
+        return;
+      }
+
+      if (hostsActive) {
+        badge("warning", "Stale hosts entry found for api.openai.com");
+      }
+      if (pfActive) {
+        badge("warning", "Stale pf rule found for api.openai.com redirect");
+      }
+
+      console.log("  You may be prompted for your sudo password...\n");
+
+      const { ensureRedirectRemoved } = await import("./codex-redirect");
+      ensureRedirectRemoved();
+
+      badge("success", "Redirect rules cleaned up.");
+    } catch (e: any) {
+      console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
+      process.exit(1);
+    }
+  });
+
+// Default (no subcommand): interactive wizard / Quick Launch
 program.action(() => {
   const opts = program.opts();
   const env: PontisEnv = {};

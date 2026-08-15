@@ -7,7 +7,6 @@ import {
   AnthropicResponse
 } from '../types';
 import { extractCachedTokens, extractOutputTokens, extractUncachedInputTokens, extractInputTokens } from '../cache';
-import { warnLog } from '../logger';
 import { StreamBufferOverflowError, StreamParseError } from '../errors';
 import { getTextEncoder, getTextDecoder, getOptimalBufferConfig } from '../stream-utils';
 

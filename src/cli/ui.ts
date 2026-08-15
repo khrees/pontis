@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 import chalk from "chalk";
 import pkg from "../../package.json";
+import { redactKey } from "../redact";
 
 export const VERSION = pkg.version || "0.0.0";
 
@@ -78,30 +79,53 @@ export function clearLine() {
   process.stdout.write("\r\x1b[K");
 }
 
-export async function selectProviderInteractive(): Promise<"opencode" | "local" | "cloudflare"> {
-  const result = await select("Choose your provider", [
-    `${t.primary("OpenCode")}     ${t.muted("Free cloud models (Zen/Go)")}`,
-    `${t.primary("Cloudflare")}   ${t.muted("Workers AI via AI Gateway")}`,
-    `${t.primary("Local")}        ${t.muted("Ollama, LM Studio, Llama.cpp…")}`,
-  ]);
-  if (result.index === 1) return "cloudflare";
-  if (result.index === 2) return "local";
+export async function selectProviderInteractive(detectedLocal?: string | null): Promise<"opencode" | "local" | "cloudflare"> {
+  const localDesc = detectedLocal
+    ? `Ollama, LM Studio... (${t.success(`Detected ${detectedLocal}`)})`
+    : "Ollama, LM Studio, Llama.cpp…";
+
+  const result = await select(
+    "Choose your AI provider",
+    [
+      `${t.primary("OpenCode")}     ${t.muted("Free cloud models (Zen/Go) — Zero setup")}`,
+      `${t.primary("Local")}        ${t.muted(localDesc)}`,
+      `${t.primary("Cloudflare")}   ${t.muted("Workers AI via AI Gateway")}`,
+    ],
+    { allowCustom: false, defaultIndex: 0 },
+  );
+  if (result.index === 1) return "local";
+  if (result.index === 2) return "cloudflare";
   return "opencode";
 }
 
-export async function selectClientInteractive(): Promise<string> {
-  const result = await select("Launch which client?", [
-    `${t.primary("Claude Code")}  ${t.muted("Anthropic's AI coding assistant")}`,
-    `${t.primary("Codex")}    ${t.muted("OpenAI's terminal coding agent")}`,
-    `${t.primary("OpenCode")}  ${t.muted("Open-source coding agent (opencode.ai)")}`,
-    `${t.primary("Pi")}      ${t.muted("The Pi coding agent (pi.dev)")}`,
-    `${t.primary("Server")}   ${t.muted("Run proxy server only (no client launcher)")}`,
-  ]);
-  if (result.index === 1) return "codex";
-  if (result.index === 2) return "opencode";
-  if (result.index === 3) return "pi";
-  if (result.index === 4) return "server";
-  return "claude";
+export async function selectClientInteractive(
+  clientStatus?: Record<string, boolean>,
+  defaultClient?: string,
+): Promise<string> {
+  const clients = [
+    { id: "claude", name: "Claude Code", desc: "Anthropic's AI coding assistant" },
+    { id: "codex", name: "Codex", desc: "OpenAI's terminal coding agent" },
+    { id: "opencode", name: "OpenCode", desc: "Open-source coding agent (opencode.ai)" },
+    { id: "pi", name: "Pi", desc: "The Pi coding agent (pi.dev)" },
+    { id: "server", name: "Server", desc: "Run proxy server only (no client launcher)" },
+  ];
+
+  let defaultIdx = 0;
+  const options = clients.map((c, i) => {
+    if (defaultClient && c.id === defaultClient) {
+      defaultIdx = i;
+    }
+    const statusText = clientStatus && c.id !== "server"
+      ? (clientStatus[c.id] ? t.success(" ✓ installed") : t.muted(" ○ auto-installs"))
+      : "";
+    return `${t.primary(c.name.padEnd(12))}${statusText ? statusText.padEnd(20) : " ".repeat(20)}  ${t.muted(c.desc)}`;
+  });
+
+  const result = await select("Launch which client?", options, {
+    allowCustom: false,
+    defaultIndex: defaultIdx,
+  });
+  return clients[result.index]?.id || "claude";
 }
 
 /** Spinner for async operations */
@@ -137,9 +161,10 @@ export function createSpinner(message: string) {
 }
 
 /** Readline-based input prompt */
-export async function input(question: string, defaultValue?: string): Promise<string> {
+export async function input(question: string, defaultValue?: string, sensitive = false): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const suffix = defaultValue ? ` ${t.muted(`[${defaultValue}]`)}` : "";
+  const displayDefault = sensitive && defaultValue ? redactKey(defaultValue) : defaultValue;
+  const suffix = displayDefault ? ` ${t.muted(`[${displayDefault}]`)}` : "";
   return new Promise((resolve) => {
     rl.question(`  ${t.secondary("?")}  ${question}${suffix} `, (answer) => {
       rl.close();
@@ -156,19 +181,38 @@ export async function confirm(question: string, defaultYes = true): Promise<bool
   return answer.toLowerCase().startsWith("y");
 }
 
+export interface SelectOptions {
+  allowCustom?: boolean;
+  defaultIndex?: number;
+  customLabel?: string;
+}
+
 /** Numbered selection menu */
 export async function select<T extends string>(
   label: string,
   options: T[],
+  config: SelectOptions = {},
 ): Promise<{ value: T; index: number }> {
+  const allowCustom = config.allowCustom ?? true;
+  const defaultIndex = config.defaultIndex;
+
   console.log(`\n  ${t.secondary("?")}  ${label}\n`);
   for (let i = 0; i < options.length; i++) {
-    console.log(`    ${t.primary(String(i + 1).padStart(2))}  ${options[i]}`);
+    const isDefault = defaultIndex === i;
+    const defaultTag = isDefault ? ` ${t.muted("[Enter]")}` : "";
+    console.log(`    ${t.primary(String(i + 1).padStart(2))}  ${options[i]}${defaultTag}`);
   }
-  const extra = options.length + 1;
-  console.log(
-    `    ${t.primary(String(extra).padStart(2))}  ${t.muted("Custom (enter manually)")}\n`,
-  );
+  const extra = allowCustom ? options.length + 1 : options.length;
+  if (allowCustom) {
+    const customLabel = config.customLabel || "Custom (enter manually)";
+    console.log(
+      `    ${t.primary(String(extra).padStart(2))}  ${t.muted(customLabel)}\n`,
+    );
+  } else {
+    console.log();
+  }
+
+  const defaultHint = defaultIndex !== undefined ? `, default: ${defaultIndex + 1}` : "";
 
   while (true) {
     const rl = createInterface({
@@ -176,14 +220,19 @@ export async function select<T extends string>(
       output: process.stdout,
     });
     const answer = await new Promise<string>((resolve) => {
-      rl.question(`  ${t.muted("Enter choice [1-" + extra + "]")} `, (a) => {
+      rl.question(`  ${t.muted(`Enter choice [1-${extra}${defaultHint}]`)} `, (a) => {
         rl.close();
         resolve(a.trim());
       });
     });
+
+    if (answer === "" && defaultIndex !== undefined && defaultIndex >= 0 && defaultIndex < options.length) {
+      return { value: options[defaultIndex], index: defaultIndex };
+    }
+
     const num = parseInt(answer, 10);
     if (!isNaN(num) && num >= 1 && num <= extra) {
-      if (num === extra) return { value: "" as T, index: -1 };
+      if (allowCustom && num === extra) return { value: "" as T, index: -1 };
       return { value: options[num - 1], index: num - 1 };
     }
     console.log(`  ${t.warning("Please enter 1–" + extra)}`);

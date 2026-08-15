@@ -14,7 +14,6 @@ import {
   isAnthropicToolUseBlock,
   isAnthropicThinkingBlock,
   isString,
-  isObject,
 } from '../../type-guards';
 
 const SAFE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"]);

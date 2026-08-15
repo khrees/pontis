@@ -1,13 +1,15 @@
-import { spawn, execSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { t, SYM, badge, kv, confirm, createSpinner, warn } from "./ui";
+import { redactKey } from "../redact";
 import { PROXY_URL } from "./proxy-manager";
 import { PI_AGENT_DIR, PI_MODELS_FILE, OPENCODE_AUTH_FILE, OPENCODE_DATA_DIR } from "./config";
 import {
   isInstalled,
   ensureClientInstalled,
+  resolveClientBinary,
   type ClientName,
 } from "./install-engine";
 
@@ -245,30 +247,53 @@ export function cleanupPiProvider(): void {
   }
 }
 
+// ──────────────────────────────────────────────
+//  Codex provider configuration
+// ──────────────────────────────────────────────
+
+const CODEX_PROVIDER_ID = "pontis";
+
 /**
- * Resolve a client binary path. Checks PATH first, then
- * falls back to ~/.pontis/clients/<name>/bin/<binary> for
- * Pontis-managed installations.
+ * Write a Pontis profile config for Codex at ~/.codex/pontis.config.toml.
+ *
+ * This follows Ollama's approach: use a dedicated profile file with a
+ * [model_providers.<name>] section and `wire_api = "responses"` so Codex
+ * sends HTTP requests to the Pontis proxy instead of WebSocket to
+ * api.openai.com. No /etc/hosts or pf redirect is needed.
+ *
+ * Codex uses the profile via: codex --profile pontis
  */
-function resolveClientBinary(name: ClientName): string {
-  // If on PATH, use it (honor existing installations)
-  try {
-    const resolved = execSync(`which "${name}" 2>/dev/null || command -v "${name}" 2>/dev/null`)
-      .toString()
-      .trim();
-    if (resolved) return resolved;
-  } catch {
-    // not found
-  }
-  // Fallback: Pontis-managed install under ~/.pontis/clients
-  const local = join(homedir(), ".pontis", "clients", name, "bin", name);
-  if (existsSync(local)) return local;
-  // npm --prefix layout: node_modules/.bin/
-  const npmBin = join(homedir(), ".pontis", "clients", name, "node_modules", ".bin", name);
-  if (existsSync(npmBin)) return npmBin;
-  // Last resort: trust the shell to find it
-  return name;
+export function setupCodexProvider(): void {
+  const dir = join(homedir(), ".codex");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  // Write a separate profile config (like Ollama does with ollama-launch.config.toml)
+  // instead of modifying the main config.toml.
+  const profilePath = join(dir, `${CODEX_PROVIDER_ID}.config.toml`);
+  const profileContent = `\
+model_provider = "${CODEX_PROVIDER_ID}"
+
+[model_providers.${CODEX_PROVIDER_ID}]
+name = "Pontis Proxy"
+base_url = "http://localhost:8787/v1"
+wire_api = "responses"
+`;
+  writeFileSync(profilePath, profileContent, { mode: 0o600 });
 }
+
+/**
+ * Remove the Pontis profile config from ~/.codex/.
+ */
+export function cleanupCodexProvider(): void {
+  const profilePath = join(homedir(), ".codex", `${CODEX_PROVIDER_ID}.config.toml`);
+  try {
+    if (existsSync(profilePath)) unlinkSync(profilePath);
+  } catch {
+    // Best effort
+  }
+}
+
+
 
 export function launchClient(
   clientCmd: string,
@@ -309,10 +334,15 @@ export function launchClient(
   >;
 
   if (clientCmd === "codex") {
+    // Follow Ollama's approach: --oss flag + OPENAI_BASE_URL + dummy API key.
+    // This tells Codex to use OpenAI-compatible HTTP API directly,
+    // no WebSocket, no api.openai.com traffic at all.
     childEnv.OPENAI_BASE_URL = `${PROXY_URL}/v1`;
     childEnv.OPENAI_API_KEY = apiKey;
-    if (!extraArgs.includes("--model"))
-      extraArgs = ["--model", model, ...extraArgs];
+    extraArgs = ["--oss", ...extraArgs];
+    if (!extraArgs.includes("--model") && !extraArgs.includes("-m")) {
+      extraArgs = extraArgs.concat("--model", model);
+    }
   } else if (clientCmd === "pi") {
     // Pi uses a custom provider written to models.json that points at the proxy.
     // The API key is embedded in that provider config, but we also pass --api-key
@@ -348,12 +378,8 @@ export function launchClient(
     autoApproveClaudeKey(apiKey);
   }
 
-  const displayArgs = extraArgs.map((a, i, arr) =>
-    a === "--api-key"
-      ? "--api-key <redacted>"
-      : i > 0 && arr[i - 1] === "--api-key"
-        ? "<redacted>"
-        : a,
+  const displayArgs = extraArgs.map((a) =>
+    apiKey && a.includes(apiKey) ? a.replaceAll(apiKey, redactKey(apiKey)) : a,
   );
   badge(
     "muted",

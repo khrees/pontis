@@ -1,68 +1,135 @@
 # Pontis 🌌
 
-**Pontis** is a bidirectional translation proxy and local CLI launcher that allows you to run **Claude Code**, **OpenAI Codex CLI**, and other terminal-based AI harnesses using free-tier models on **OpenCode** or **locally installed models** (Ollama, LM Studio, etc.).
+**Pontis** is the universal AI gateway and runtime launcher for developer coding agents. It connects any AI coding harness (**Claude Code**, **OpenAI Codex CLI**, **OpenCode**, **Pi**) to any LLM provider (**OpenCode Zen/Go**, **Cloudflare Workers AI**, **local engines** like Ollama, LM Studio, and Llama.cpp, or custom OpenAI/Anthropic-compatible endpoints) with zero friction.
 
-It bridges the gap between Anthropic format (`/v1/messages`), OpenAI chat completions (`/v1/chat/completions`), and OpenAI legacy completions (`/v1/completions`), translating requests, responses, and SSE streams on the fly to match the target engine.
-
----
-
-## Features
-
-- **🚀 Direct CLI Installation**: Install globally with a single curl command.
-- **💻 Local Model Engines**: Support for Ollama, LM Studio, Llama.cpp, and custom local endpoints out of the box with zero external API keys required.
-- **✨ Active Model Discovery**: Dynamically scans OpenCode's endpoints or your local model server's `/models` list.
-- **👁️ Auto-Vision Format Translation**: Translates Anthropic base64 and URL image blocks into standard OpenAI `image_url` payloads, enabling image inputs if your chosen upstream engine supports vision processing.
-- **🔑 Auto-Approved API Keys**: Writes key configurations into your `~/.claude.json` to bypass OAuth redirects automatically.
-- **⚙️ OpenAI Completions / Codex Compatibility**: Translates the OpenAI Responses API (used by Codex CLI) to chat completions, including tool calls, tool outputs, and streaming events.
+Pontis performs real-time bidirectional protocol translation between **Anthropic Messages** (`/v1/messages`), **OpenAI Chat Completions** (`/v1/chat/completions`), **OpenAI Responses API** (`/v1/responses` via HTTP and WebSocket), and **OpenAI Legacy Completions** (`/v1/completions`) — translating tool calls, reasoning/thinking blocks, prompt caching markers, and streaming events on the fly.
 
 ---
 
-## Prerequisites
+## Key Capabilities
 
-Before running Pontis, make sure you have:
-- **Node.js** (v18 or higher) installed on your system.
-- **Claude Code** (optional) installed globally:
-  ```bash
-  npm install -g @anthropic-ai/claude-code
-  ```
-- **Codex CLI** (optional) installed globally:
-  ```bash
-  npm install -g @openai/codex-cli
-  ```
-- **Local Engine** (optional, e.g. Ollama or LM Studio) running locally.
+- **🌐 Universal Protocol Translation**:
+  - **Anthropic Messages ↔ OpenAI Chat**: Run Claude Code against any OpenAI-compatible provider with full tool-calling and image support.
+  - **OpenAI Responses API Translation**: Run OpenAI Codex CLI against OpenCode, Cloudflare, or local LLMs with full multi-turn context and streaming event translation.
+  - **Multimodal & Vision Translation**: Automatically translates Anthropic base64/URL image blocks into standard OpenAI `image_url` payloads.
+  - **Reasoning & Extended Thinking**: Seamlessly preserves and passes deep reasoning tokens (e.g. DeepSeek R1, Kimi, GLM).
+  - **Prompt Cache Bridging**: Bridges Anthropic `cache_control` breakpoints with OpenAI prompt caching hash keys.
+
+- **⚡ Coding Agent Lifecycle & Launcher**:
+  - Instant 1-click launchers for **Claude Code** (`pontis claude`), **Codex CLI** (`pontis codex`), **OpenCode** (`pontis opencode`), and **Pi** (`pontis pi`).
+  - Auto-configures client settings and auth files (`~/.claude.json`, `~/.codex/pontis.config.toml`, `~/.local/share/opencode/auth.json`, `~/.pi/agent/models.json`) in the background.
+  - Built-in install engine with automatic PATH resolution and on-demand installation.
+
+- **🔑 Secure Credential Vault & Unified Auth**:
+  - AES-256-GCM encrypted local credential storage (`pontis auth`) for OpenCode keys, Cloudflare tokens, and local API keys.
+  - No plaintext tokens written to disk.
+
+- **⚙️ Configurable & Extensible**:
+  - Deployable as a local proxy (`pontis server`), CLI binary, or Cloudflare Worker.
+  - User preference persistence (`pontis config`) and environment variable overrides via `.env`.
 
 ---
 
 ## Installation
 
-Install Pontis globally using the install script:
+Install Pontis globally using the official installer:
 
 ```bash
 curl -fsL https://pontis.khrees.com/install | bash
 ```
 
-This clones Pontis to `~/.pontis`, configures local dependencies, and sets up the global `pontis` command symlink in your `PATH`.
+Or clone and build locally with Bun:
+
+```bash
+git clone https://github.com/khrees2412/pontis.git
+cd pontis
+bun install
+bun run build
+```
 
 ---
 
-## Quick Start (Interactive Setup)
+## Quick Start
 
-1. Launch Pontis CLI:
-   ```bash
-   pontis
-   ```
-2. Select your **API Provider**:
-   * **OpenCode (Zen/Go)**: Enter your OpenCode API Key when prompted (get one from [opencode.ai](https://opencode.ai/auth)).
-   * **Local Models**: Choose from Ollama, LM Studio, Llama.cpp, or enter a custom URL.
-3. Select one of the dynamically fetched models available on that provider.
-4. Claude Code will boot up automatically using your chosen model configuration!
+### 1. Launch Pontis
+```bash
+pontis
+```
+- **First time**: Guided 2-step setup (Choose provider → Enter key → Choose coding agent). Your key is automatically encrypted in secure storage.
+- **Returning**: Instant **1-click Quick Launch** (press Enter to run your default client & model immediately).
 
-### Command Subcommands:
-You can direct Pontis to launch a specific client interface directly:
+### 2. Direct Client Launchers
+Launch your preferred AI coding assistant directly with your saved provider and model:
 
 * **Claude Code**: `pontis claude`
-* **Codex**: `pontis codex`
-* **Standalone Server**: `pontis server` (keeps only the proxy server running on `http://localhost:8787` for external API connections)
+* **Codex CLI**: `pontis codex`
+* **OpenCode**: `pontis opencode`
+* **Pi**: `pontis pi`
+* **Standalone Server**: `pontis server` (runs proxy on `http://localhost:8787` without launching a client)
+
+---
+
+## Authentication & API Keys
+
+Manage credentials across OpenCode, Cloudflare Workers AI, and local engines with the unified `auth` command:
+
+```bash
+# View configured credentials & key status
+pontis auth list
+
+# Add or update a key (interactive or direct)
+pontis auth set opencode
+pontis auth set cloudflare
+pontis auth set local http://localhost:11434/v1
+
+# Remove a provider's credentials
+pontis auth remove opencode
+pontis auth remove cloudflare
+
+# Clear all credentials securely
+pontis auth clear
+```
+
+---
+
+## Coding Agent CLIs
+
+List and manage supported terminal coding assistants:
+
+```bash
+# List all clients, installed versions, paths, and status
+pontis clients
+# or
+pontis list
+
+# Set your default launch client
+pontis clients default claude
+pontis clients default codex
+
+# Install missing clients
+pontis install claude
+pontis install codex
+pontis install pi
+```
+
+---
+
+## User Preferences & Defaults
+
+Customize default behavior without having to export environment variables every session:
+
+```bash
+# View current preferences
+pontis config
+
+# Set default model, client, or provider
+pontis config set client codex
+pontis config set model deepseek-v4-flash-free
+pontis config set provider opencode
+
+# Reset preferences to defaults
+pontis config reset
+```
 
 ---
 

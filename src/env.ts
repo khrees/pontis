@@ -53,6 +53,46 @@ export function getUpstreamFormat(): string {
   return (process?.env?.PONTIS_UPSTREAM_FORMAT || "openai").toLowerCase();
 }
 
+export function getPort(fallback = 8787): number {
+  return getEnvAsNumber("PONTIS_PORT", getEnvAsNumber("PORT", fallback, 1), 1);
+}
+
+export function getHost(fallback = "127.0.0.1"): string {
+  return getEnv("PONTIS_HOST", fallback);
+}
+
+export function getRedirectPort(fallback = 8443): number {
+  return getEnvAsNumber("PONTIS_REDIRECT_PORT", fallback, 1);
+}
+
+export function getZenUpstream(fallback = "https://opencode.ai/zen/v1"): string {
+  return getEnv("PONTIS_ZEN_UPSTREAM", fallback);
+}
+
+export function getGoUpstream(fallback = "https://opencode.ai/zen/go/v1"): string {
+  return getEnv("PONTIS_GO_UPSTREAM", fallback);
+}
+
+export function getMaxBufferBytes(fallback = 5 * 1024 * 1024): number {
+  const mb = getEnvAsNumber("PONTIS_MAX_BUFFER_MB", 0);
+  if (mb > 0) return mb * 1024 * 1024;
+  return getEnvAsNumber("PONTIS_MAX_BUFFER_BYTES", fallback, 1024);
+}
+
+export function getChunkSizeBytes(fallback = 64 * 1024): number {
+  const kb = getEnvAsNumber("PONTIS_CHUNK_SIZE_KB", 0);
+  if (kb > 0) return kb * 1024;
+  return getEnvAsNumber("PONTIS_CHUNK_SIZE_BYTES", fallback, 512);
+}
+
+export function getCacheMaxTurns(fallback = 50): number {
+  return getEnvAsNumber("PONTIS_CACHE_MAX_TURNS", fallback, 1);
+}
+
+export function getCacheTtlMs(fallback = 5 * 60 * 1000): number {
+  return getEnvAsNumber("PONTIS_CACHE_TTL_MS", fallback, 1000);
+}
+
 export function getMinKeyLength(): number {
   const val = process?.env?.PONTIS_MIN_KEY_LENGTH;
   if (val === undefined || val === "") return 32;

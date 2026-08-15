@@ -4,16 +4,21 @@ import {
   getUpstreamUrl,
   getUpstreamFormat,
   isCodexMode,
+  getGoUpstream,
+  getZenUpstream,
+  getEnv,
 } from "./env";
 import { extractApiKey, validateApiKey } from "./auth";
 import { InvalidApiKeyError } from "./errors";
 
-export const GO_UPSTREAM = "https://opencode.ai/zen/go/v1";
-export const ZEN_UPSTREAM = "https://opencode.ai/zen/v1";
+export const GO_UPSTREAM = getGoUpstream("https://opencode.ai/zen/go/v1");
+export const ZEN_UPSTREAM = getZenUpstream("https://opencode.ai/zen/v1");
 export const DEFAULT_UPSTREAM = GO_UPSTREAM;
 export const VISION_MODEL = "qwen3.6-plus";
 
 export function getVisionModel(): string {
+  const custom = getEnv("PONTIS_VISION_MODEL");
+  if (custom) return custom;
   if (getProvider() === "cloudflare") {
     return "@cf/meta/llama-3.2-11b-vision-instruct";
   }

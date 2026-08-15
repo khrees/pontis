@@ -243,11 +243,10 @@ describe('Edge Cases and Error Handling', () => {
       const validationError = new ValidationError('Test');
       const genericError = new Error('Test');
 
-      // These would need to be imported from errors.ts
-      // expect(isAuthenticationError(authError)).toBe(true);
-      // expect(isUpstreamError(timeoutError)).toBe(true);
-      // expect(isValidationError(validationError)).toBe(true);
-      // expect(isAuthenticationError(genericError)).toBe(false);
+      expect(authError.name).toBe('InvalidApiKeyError');
+      expect(timeoutError.name).toBe('UpstreamTimeoutError');
+      expect(validationError.name).toBe('ValidationError');
+      expect(genericError.name).toBe('Error');
     });
   });
 
@@ -255,7 +254,7 @@ describe('Edge Cases and Error Handling', () => {
     it('should handle empty requests', () => {
       const emptyString = '';
       const emptyObject = {};
-      const emptyArray = [];
+      const emptyArray: unknown[] = [];
 
       expect(isString(emptyString)).toBe(true);
       expect(isObject(emptyObject)).toBe(true);

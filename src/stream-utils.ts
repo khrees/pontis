@@ -1,3 +1,5 @@
+import { getMaxBufferBytes, getChunkSizeBytes } from './env';
+
 /**
  * Streaming utilities for optimized encoder/decoder reuse and buffer management.
  * Reduces memory allocation overhead in streaming operations.
@@ -51,18 +53,21 @@ export interface StreamBufferConfig {
 /**
  * Default buffer configuration optimized for typical AI streaming scenarios
  */
-export const DEFAULT_BUFFER_CONFIG: StreamBufferConfig = {
-  maxSize: 5 * 1024 * 1024,  // 5MB (reduced from 10MB)
-  chunkSize: 64 * 1024,       // 64KB chunks
-  watermark: 4 * 1024 * 1024, // 4MB watermark (80% of max)
-};
+export function getDefaultBufferConfig(): StreamBufferConfig {
+  const maxSize = getMaxBufferBytes(5 * 1024 * 1024);
+  const chunkSize = getChunkSizeBytes(64 * 1024);
+  const watermark = Math.floor(maxSize * 0.8);
+  return { maxSize, chunkSize, watermark };
+}
+
+export const DEFAULT_BUFFER_CONFIG: StreamBufferConfig = getDefaultBufferConfig();
 
 /**
  * Stream buffer manager for efficient memory usage
  */
 export class StreamBufferManager {
   private buffer: string = '';
-  private config: StreamBufferConfig;
+  public readonly config: StreamBufferConfig;
   private processedChunks: number = 0;
 
   constructor(config: StreamBufferConfig = DEFAULT_BUFFER_CONFIG) {
@@ -145,12 +150,10 @@ export class StreamBufferManager {
  * Optimized SSE event processor with reusable components
  */
 export class SSEEventProcessor {
-  private encoder: TextEncoder;
   private decoder: TextDecoder;
   private bufferManager: StreamBufferManager;
 
   constructor(config?: StreamBufferConfig) {
-    this.encoder = getTextEncoder();
     this.decoder = getTextDecoder();
     this.bufferManager = new StreamBufferManager(config);
   }
@@ -240,7 +243,6 @@ export function createSSETransformer(
   config?: StreamBufferConfig
 ): TransformStream<Uint8Array, Uint8Array> {
   const processor = new SSEEventProcessor(config);
-  const encoder = getTextEncoder();
 
   return new TransformStream({
     async transform(chunk, controller) {

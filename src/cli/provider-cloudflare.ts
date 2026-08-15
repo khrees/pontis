@@ -1,11 +1,13 @@
 import { writeFileSync } from "node:fs";
-import { select, input, confirm, createSpinner, badge, section, error } from "./ui";
+import { t, select, input, createSpinner, badge, section, error } from "./ui";
 import {
   CLOUDFLARE_CONFIG_FILE,
   CLOUDFLARE_FALLBACK_MODELS,
   CLOUDFLARE_CATEGORIES,
   getCloudflareConfigSaved,
 } from "./config";
+import { storeCloudflareApiToken } from "../secure-storage";
+import { savePreferences } from "./preferences";
 
 export async function getCloudflareConfigInteractive(): Promise<{
   apiToken: string;
@@ -25,14 +27,18 @@ export async function getCloudflareConfigInteractive(): Promise<{
   }
 
   const saved = getCloudflareConfigSaved();
-  if (saved.apiToken && saved.accountId && saved.gatewayId) {
-    return saved as { apiToken: string; accountId: string; gatewayId: string };
-  }
+  const hasSaved = !!(saved.apiToken && saved.accountId && saved.gatewayId);
 
-  section("Cloudflare AI Gateway Setup");
-  console.log(
-    `  Configure Cloudflare Workers AI via AI Gateway\n`,
-  );
+  if (hasSaved) {
+    console.log(
+      `  ${t.muted("Saved Cloudflare config found — press Enter to keep or type new values to update.")}\n`,
+    );
+  } else {
+    section("Cloudflare AI Gateway Setup");
+    console.log(
+      `  Configure Cloudflare Workers AI via AI Gateway\n`,
+    );
+  }
 
   const accountId = await input("Paste your Cloudflare Account ID", saved.accountId);
   if (!accountId) error("Account ID is required.");
@@ -40,19 +46,19 @@ export async function getCloudflareConfigInteractive(): Promise<{
   const gatewayId = await input("Paste your Cloudflare AI Gateway ID", saved.gatewayId || "default");
   if (!gatewayId) error("Gateway ID is required.");
 
-  const apiToken = await input("Paste your Cloudflare API Token (API Key)", saved.apiToken);
+  const apiToken = await input("Paste your Cloudflare API Token (API Key)", saved.apiToken, true);
   if (!apiToken) error("API Token is required.");
 
   const config = { accountId: accountId.trim(), gatewayId: gatewayId.trim(), apiToken: apiToken.trim() };
 
-  const save = await confirm("Save configuration for future use?", true);
-  if (save) {
-    writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify(config, null, 2), {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-    badge("success", "Configuration saved to " + CLOUDFLARE_CONFIG_FILE);
-  }
+  // Save accountId/gatewayId to config file
+  writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify(config, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  // Save API token to encrypted secure storage
+  storeCloudflareApiToken(config.apiToken);
+  badge("success", "Cloudflare configuration saved securely");
 
   return config;
 }
@@ -154,6 +160,8 @@ export async function setupCloudflareInteractive(): Promise<{
   if (!selectedModel) {
     selectedModel = "@cf/moonshotai/kimi-k2.6";
   }
+
+  savePreferences({ defaultModel: selectedModel, defaultProvider: "cloudflare" });
 
   return { model: selectedModel, apiKey: apiToken, upstreamUrl };
 }

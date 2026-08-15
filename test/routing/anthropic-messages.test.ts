@@ -3,7 +3,6 @@ import worker from '../../src/index';
 import type { OpenAIResponse } from '../../src/types';
 import {
   parseCapturedBody,
-  parseResponsesJson,
   type CapturedRequestBody,
 } from '../helpers';
 
