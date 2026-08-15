@@ -7,13 +7,20 @@
  * instead of scattering `declare const process` across the codebase.
  */
 
-declare const process: { env?: Record<string, string | undefined> };
+declare const process: { env?: Record<string, string | undefined> } | undefined;
+
+function getRawEnv(name: string): string | undefined {
+  if (typeof process !== "undefined" && process?.env) {
+    return process.env[name];
+  }
+  return undefined;
+}
 
 // ── Generic accessors ──
 
 /** Read a string env var. Returns `fallback` when unset or empty. */
 export function getEnv(name: string, fallback = ""): string {
-  return process?.env?.[name] || fallback;
+  return getRawEnv(name) || fallback;
 }
 
 /** Read a number env var. Returns `fallback` when unset, empty, or NaN. */
@@ -22,7 +29,7 @@ export function getEnvAsNumber(
   fallback: number,
   min?: number,
 ): number {
-  const val = process?.env?.[name];
+  const val = getRawEnv(name);
   if (val === undefined || val === "") return fallback;
   const n = parseInt(val, 10);
   if (!Number.isFinite(n)) return fallback;
@@ -32,25 +39,25 @@ export function getEnvAsNumber(
 
 /** Read a boolean env var (true when value is the string "true"). */
 export function getEnvAsBoolean(name: string): boolean {
-  return process?.env?.[name] === "true";
+  return getRawEnv(name) === "true";
 }
 
 // ── Named accessors for Pontis env vars ──
 
 export function getProvider(): string {
-  return (process?.env?.PONTIS_PROVIDER || "").toLowerCase();
+  return (getRawEnv("PONTIS_PROVIDER") || "").toLowerCase();
 }
 
 export function getModel(): string {
-  return process?.env?.PONTIS_MODEL || "";
+  return getRawEnv("PONTIS_MODEL") || "";
 }
 
 export function getUpstreamUrl(): string {
-  return process?.env?.PONTIS_UPSTREAM_URL || "";
+  return getRawEnv("PONTIS_UPSTREAM_URL") || "";
 }
 
 export function getUpstreamFormat(): string {
-  return (process?.env?.PONTIS_UPSTREAM_FORMAT || "openai").toLowerCase();
+  return (getRawEnv("PONTIS_UPSTREAM_FORMAT") || "openai").toLowerCase();
 }
 
 export function getPort(fallback = 8787): number {
@@ -94,18 +101,18 @@ export function getCacheTtlMs(fallback = 5 * 60 * 1000): number {
 }
 
 export function getMinKeyLength(): number {
-  const val = process?.env?.PONTIS_MIN_KEY_LENGTH;
+  const val = getRawEnv("PONTIS_MIN_KEY_LENGTH");
   if (val === undefined || val === "") return 32;
   const n = parseInt(val, 10);
   return Number.isFinite(n) && n >= 0 ? n : 32;
 }
 
 export function isCodexMode(): boolean {
-  return process?.env?.PONTIS_CODEX_MODE === "true";
+  return getRawEnv("PONTIS_CODEX_MODE") === "true";
 }
 
 export function getTimeoutMs(fallback = 120000): number {
-  const val = process?.env?.PONTIS_TIMEOUT_MS;
+  const val = getRawEnv("PONTIS_TIMEOUT_MS");
   if (val === undefined || val === "") return fallback;
   const n = parseInt(val, 10);
   return Number.isFinite(n) && n >= 1000 ? n : fallback;
@@ -119,5 +126,5 @@ export function hasProcess(): boolean {
 // ── Debug helpers ──
 
 export function isDebug(): boolean {
-  return hasProcess() && process.env?.PONTIS_DEBUG === "true";
+  return getRawEnv("PONTIS_DEBUG") === "true";
 }
