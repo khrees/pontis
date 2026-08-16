@@ -9,9 +9,9 @@ import {
   t,
 } from "./ui";
 import { selectProviderInteractive, selectClientInteractive } from "./ui";
-import { setupLocalInteractive, detectRunningLocalEngine } from "./provider-local";
+import { setupLocalInteractive, detectRunningLocalEngine, fetchLocalModels } from "./provider-local";
 import { setupOpenCodeInteractive, getOpenCodeApiKeyInteractive, fetchWorkingOpenCodeModels } from "./provider-opencode";
-import { setupCloudflareInteractive, getCloudflareConfigInteractive } from "./provider-cloudflare";
+import { setupCloudflareInteractive, getCloudflareConfigInteractive, fetchCloudflareModels } from "./provider-cloudflare";
 import { startProxy, killActiveProxy } from "./proxy-manager";
 import {
   launchClient,
@@ -30,9 +30,6 @@ import {
   getOpenCodeApiKey,
   getProviderDisplayName,
   resolveActiveProviderAndModel,
-  FALLBACK_MODELS,
-  CLOUDFLARE_FALLBACK_MODELS,
-  LOCAL_FALLBACK_MODELS,
   type PontisEnv,
 } from "./config";
 import {
@@ -304,21 +301,52 @@ async function launchProxyAndClient(
 
     // Fast connectivity verification
     let ok = await testConnectivity(apiKey, model, provider);
-    if (!ok && process.stdin.isTTY) {
-      const recoveredModel = await promptModelRecovery(provider, apiKey, model);
-      if (recoveredModel) {
-        model = recoveredModel;
-        updateLastUsed(clientCmd as ClientName | "server", provider, model);
-        savePreferences({ defaultModel: model });
+    while (!ok && process.stdin.isTTY) {
+      const recovered = await promptRecovery(provider, apiKey, model, upstreamUrl);
+      if (!recovered) break;
 
-        // Update client-specific provider configs with new model
-        if (clientCmd === "pi") setupPiProvider(apiKey, model);
+      provider = recovered.provider;
+      model = recovered.model;
+      apiKey = recovered.apiKey;
+      upstreamUrl = recovered.upstreamUrl;
 
-        // Restart proxy with the new model
-        await startProxy(model, false);
-        ok = await testConnectivity(apiKey, model, provider);
+      // Update runtime environment
+      process.env.PONTIS_PROVIDER = provider;
+      process.env.PONTIS_MODEL = model;
+      if (upstreamUrl) {
+        process.env.PONTIS_UPSTREAM_URL = upstreamUrl;
+      } else {
+        delete process.env.PONTIS_UPSTREAM_URL;
       }
+
+      // Persist preferences
+      savePreferences({
+        defaultProvider: provider,
+        defaultModel: model,
+        ...(upstreamUrl ? { localEndpoint: upstreamUrl } : {}),
+      });
+      updateLastUsed(clientCmd as ClientName | "server", provider, model);
+
+      // Client-specific provider re-wiring
+      switch (clientCmd) {
+        case "pi":
+          setupPiProvider(apiKey, model);
+          badge("muted", "Updated Pi provider in ~/.pi/agent/models.json");
+          break;
+        case "opencode":
+          setupOpenCodeProvider(apiKey);
+          badge("muted", "Updated OpenCode proxy auth");
+          break;
+        case "codex":
+          setupCodexProvider();
+          break;
+      }
+
+      // Restart proxy with the new model & configuration
+      await startProxy(model, false);
+      ok = await testConnectivity(apiKey, model, provider);
     }
+
     if (!ok) {
       process.exit(1);
     }
@@ -343,16 +371,25 @@ async function launchProxyAndClient(
   }
 }
 
+export interface RecoveryResult {
+  provider: ProviderType;
+  model: string;
+  apiKey: string;
+  upstreamUrl?: string;
+}
+
 /**
- * Interactive model recovery when a configured model is rejected by the upstream.
+ * Interactive connection recovery when a configured model or provider fails.
+ * Allows picking working models or switching providers entirely.
  */
-async function promptModelRecovery(
+async function promptRecovery(
   provider: ProviderType,
   apiKey: string,
   failedModel: string,
-): Promise<string | null> {
+  upstreamUrl?: string,
+): Promise<RecoveryResult | null> {
   console.log(`\n  ${t.bold("Auto-Recovery")}`);
-  console.log(`  ${t.muted("Would you like to select a working model now?")}\n`);
+  console.log(`  ${t.muted("How would you like to resolve this connection issue?")}\n`);
 
   let availableModels: string[] = [];
   if (provider === "opencode") {
@@ -363,29 +400,112 @@ async function promptModelRecovery(
     spin.stop(
       availableModels.length > 0
         ? { type: "success", text: `${availableModels.length} models available` }
-        : { type: "warning", text: "Using fallback model list" },
+        : { type: "warning", text: "No models returned from OpenCode API" },
     );
-    if (availableModels.length === 0) availableModels = FALLBACK_MODELS;
   } else if (provider === "cloudflare") {
-    availableModels = CLOUDFLARE_FALLBACK_MODELS;
+    const savedCf = getCloudflareConfigSaved();
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || savedCf.accountId;
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN || savedCf.apiToken;
+    let liveCf: string[] = [];
+    if (accountId && apiToken) {
+      const spin = createSpinner("Fetching live Cloudflare models...");
+      try {
+        liveCf = await fetchCloudflareModels(accountId, apiToken);
+      } catch {}
+      spin.stop(
+        liveCf.length > 0
+          ? { type: "success", text: `${liveCf.length} Cloudflare models available` }
+          : { type: "warning", text: "No models returned from Cloudflare" },
+      );
+    }
+    availableModels = liveCf;
   } else {
-    availableModels = LOCAL_FALLBACK_MODELS;
+    const prefs = getPreferences();
+    const endpoint = upstreamUrl || prefs.localEndpoint || "http://localhost:11434/v1";
+    const spin = createSpinner(`Fetching live models from local engine (${endpoint})...`);
+    try {
+      availableModels = await fetchLocalModels(endpoint, apiKey);
+    } catch {}
+    spin.stop(
+      availableModels.length > 0
+        ? { type: "success", text: `${availableModels.length} local models found` }
+        : { type: "warning", text: "No models returned from local engine" },
+    );
   }
 
   // Filter out the failed model from suggestions
   availableModels = availableModels.filter((m) => m !== failedModel);
 
-  const choices = [...availableModels, `${t.muted("Cancel / Exit")}`];
-  const choice = await select("Choose a model to switch to", choices, {
+  const choices = [
+    ...availableModels,
+    `${t.primary("⚙  Switch Provider (Cloudflare, OpenCode, Local)")}`,
+    `${t.muted("Cancel / Exit")}`,
+  ];
+
+  const choice = await select("Choose a working model or switch provider", choices, {
     allowCustom: true,
     defaultIndex: 0,
   });
 
+  // Custom manual model entry
   if (choice.index === -1) {
-    return choice.value.trim() || null;
+    const customModel = choice.value.trim();
+    if (!customModel) return null;
+    return { provider, model: customModel, apiKey };
   }
+
+  // Cancel / Exit
   if (choice.index === choices.length - 1) {
     return null;
   }
-  return choice.value;
+
+  // Switch Provider option
+  if (choice.index === choices.length - 2) {
+    const detectedLocal = await detectRunningLocalEngine();
+    const newProvider = await selectProviderInteractive(detectedLocal ? `${detectedLocal.name}` : null);
+
+    let newModel: string;
+    let newApiKey: string;
+    let newUpstreamUrl: string | undefined;
+
+    switch (newProvider) {
+      case "local": {
+        section("Local AI Setup");
+        const local = await setupLocalInteractive();
+        newModel = local.model;
+        newApiKey = local.apiKey;
+        newUpstreamUrl = local.upstreamUrl;
+        break;
+      }
+      case "cloudflare": {
+        section("Cloudflare AI Gateway Setup");
+        const cf = await setupCloudflareInteractive();
+        newModel = cf.model;
+        newApiKey = cf.apiKey;
+        newUpstreamUrl = cf.upstreamUrl;
+        break;
+      }
+      default: {
+        section("OpenCode Setup");
+        const oc = await setupOpenCodeInteractive();
+        newModel = oc.model;
+        newApiKey = oc.apiKey;
+        break;
+      }
+    }
+
+    return {
+      provider: newProvider,
+      model: newModel,
+      apiKey: newApiKey,
+      upstreamUrl: newUpstreamUrl,
+    };
+  }
+
+  // Selected a model from the list
+  return {
+    provider,
+    model: choice.value,
+    apiKey,
+  };
 }

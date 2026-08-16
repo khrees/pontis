@@ -2,8 +2,6 @@ import { writeFileSync } from "node:fs";
 import { t, select, input, createSpinner, badge, section, error } from "./ui";
 import {
   CLOUDFLARE_CONFIG_FILE,
-  CLOUDFLARE_FALLBACK_MODELS,
-  CLOUDFLARE_CATEGORIES,
   getCloudflareConfigSaved,
 } from "./config";
 import { storeCloudflareApiToken } from "../secure-storage";
@@ -107,45 +105,29 @@ export async function setupCloudflareInteractive(): Promise<{
     rawModels.length > 0
       ? {
           type: "success",
-          text: `Found ${rawModels.length} model${rawModels.length === 1 ? "" : "s"} total`,
+          text: `Found ${rawModels.length} model${rawModels.length === 1 ? "" : "s"} available`,
         }
-      : { type: "warning", text: "Using fallback model lists" },
+      : { type: "warning", text: "No models returned from Cloudflare API" },
   );
 
-  const categories = [
-    CLOUDFLARE_CATEGORIES.flagship,
-    CLOUDFLARE_CATEGORIES.cheap,
-    CLOUDFLARE_CATEGORIES.vision,
-  ];
-  const categoryChoices = [
-    ...categories.map((c) => c.name),
-    "📁 All Available Models (Full List)",
-    "✏️ Enter Custom Model ID",
-  ];
-
-  const catResult = await select("Choose a model category", categoryChoices);
   let selectedModel = "";
-
-  const category = categories[catResult.index];
-  if (category) {
-    const matched = rawModels.filter((m) =>
-      category.keywords.some((k) => m.toLowerCase().includes(k)),
+  if (rawModels.length === 0) {
+    selectedModel = await input(
+      "Enter your Cloudflare model ID (e.g. @cf/meta/llama-3.3-70b-instruct)",
+      "@cf/moonshotai/kimi-k2.6",
     );
-    const modelsToPresent = matched.length > 0 ? matched : category.fallbacks;
-    const modelRes = await select(category.prompt, modelsToPresent);
-    selectedModel = modelRes.index === -1 ? await input("Enter model ID") : modelRes.value;
-  } else if (catResult.index === categories.length) {
-    // Full List
-    const modelsToPresent = rawModels.length > 0 ? rawModels : CLOUDFLARE_FALLBACK_MODELS;
-    const modelRes = await select("Choose from all models", modelsToPresent);
-    selectedModel = modelRes.index === -1 ? await input("Enter model ID") : modelRes.value;
+    if (!selectedModel) selectedModel = "@cf/moonshotai/kimi-k2.6";
   } else {
-    // Custom Model ID
-    selectedModel = await input("Enter custom model ID", "@cf/moonshotai/kimi-k2.6");
-  }
-
-  if (!selectedModel) {
-    selectedModel = "@cf/moonshotai/kimi-k2.6";
+    const choices = [...rawModels, "✏️ Enter Custom Model ID"];
+    const modelRes = await select("Choose a Cloudflare model", choices, {
+      defaultIndex: 0,
+    });
+    if (modelRes.index === -1 || modelRes.index === choices.length - 1) {
+      selectedModel = await input("Enter model ID", rawModels[0]);
+      if (!selectedModel) selectedModel = rawModels[0];
+    } else {
+      selectedModel = modelRes.value;
+    }
   }
 
   savePreferences({ defaultModel: selectedModel, defaultProvider: "cloudflare" });

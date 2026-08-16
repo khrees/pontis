@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { select, input, createSpinner, badge, section, splash, t } from "./ui";
-import { CACHE_FILE, FALLBACK_MODELS, getOpenCodeApiKey } from "./config";
+import { CACHE_FILE, getOpenCodeApiKey } from "./config";
 import { storeOpenCodeApiKey } from "../secure-storage";
 import { savePreferences } from "./preferences";
 import { isFreeOpenCodeModel } from "../opencode-models";
@@ -108,27 +108,30 @@ export async function setupOpenCodeInteractive(): Promise<{
 }> {
   const apiKey = await getOpenCodeApiKeyInteractive();
 
-  const spin = createSpinner("Checking available free models...");
-  let models = await fetchWorkingOpenCodeModels(apiKey);
+  const spin = createSpinner("Checking available models...");
+  const models = await fetchWorkingOpenCodeModels(apiKey);
   spin.stop(
     models.length > 0
       ? {
           type: "success",
           text: `${models.length} model${models.length === 1 ? "" : "s"} available`,
         }
-      : { type: "warning", text: "Using fallback model list" },
+      : { type: "warning", text: "No models returned from OpenCode API" },
   );
-  if (models.length === 0) models = FALLBACK_MODELS;
 
-  const result = await select("Pick a free model", models, { defaultIndex: 0 });
   let model: string;
-  if (result.index === -1) {
-    model = await input("Enter model ID", models[0]);
-    if (!model) {
-      model = models[0];
-    }
+  if (models.length === 0) {
+    model = await input("Enter model ID (e.g. mimo-v2.5-free, qwen3.6-plus)", "mimo-v2.5-free");
+    if (!model) model = "mimo-v2.5-free";
   } else {
-    model = result.value;
+    const choices = [...models, "✏️ Enter Custom Model ID"];
+    const result = await select("Pick a model", choices, { defaultIndex: 0 });
+    if (result.index === -1 || result.index === choices.length - 1) {
+      model = await input("Enter model ID", models[0]);
+      if (!model) model = models[0];
+    } else {
+      model = result.value;
+    }
   }
 
   savePreferences({ defaultModel: model, defaultProvider: "opencode" });

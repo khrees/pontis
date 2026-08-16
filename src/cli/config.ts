@@ -38,71 +38,6 @@ export const CLIENTS_DIR = join(PONTIS_DIR, "clients");
 export const OPENCODE_DATA_DIR = join(homedir(), ".local", "share", "opencode");
 export const OPENCODE_AUTH_FILE = join(OPENCODE_DATA_DIR, "auth.json");
 
-export const FALLBACK_MODELS = [
-  "mimo-v2.5-free",
-  "deepseek-v4-flash-free",
-  "big-pickle",
-  "nemotron-3.5-lightning-free",
-  "nemotron-3-ultra-free",
-  "hy3-free",
-  "laguna-s-2.1-free",
-  "qwen3.6-plus",
-  "kimi-k3",
-];
-
-export const CLOUDFLARE_FALLBACK_MODELS = [
-  "@cf/moonshotai/kimi-k2.6",
-  "@cf/zai-org/glm-5.2",
-  "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
-  "@cf/deepseek-ai/deepseek-r1-distill-llama-8b",
-  "@cf/qwen/qwen2.5-coder-32b-instruct",
-  "@cf/qwen/qwen2.5-14b-instruct",
-  "@cf/qwen/qwen2.5-7b-instruct",
-  "@cf/qwen/qwq-32b",
-  "@cf/meta/llama-3.2-3b-instruct",
-  "@cf/meta/llama-3.2-1b-instruct",
-  "@cf/zai-org/glm-4.7-flash",
-  "@cf/meta/llama-3.1-8b-instruct",
-  "@cf/meta/llama-3.2-11b-vision-instruct",
-];
-
-export const CLOUDFLARE_CATEGORIES = {
-  flagship: {
-    name: "🚀 Flagship / Coding / Reasoning (Kimi 2.6, GLM 5.2, Qwen 2.5 Coder, DeepSeek R1 32B...)",
-    prompt: "Choose flagship/coding model",
-    keywords: ["kimi-k2.6", "kimi-k2.7", "glm-5.2", "qwen2.5-coder", "deepseek-r1-distill-qwen-32b", "qwq-32b"],
-    fallbacks: [
-      "@cf/moonshotai/kimi-k2.6",
-      "@cf/zai-org/glm-5.2",
-      "@cf/qwen/qwen2.5-coder-32b-instruct",
-      "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
-      "@cf/qwen/qwq-32b",
-    ]
-  },
-  cheap: {
-    name: "⚡ Fast / Cheap / Lightweight (Llama 3.2, Qwen 2.5 7B/14B, DeepSeek R1 8B, GLM Flash...)",
-    prompt: "Choose lightweight model",
-    keywords: ["llama-3.2-1b", "llama-3.2-3b", "glm-4.7-flash", "llama-3.1-8b", "qwen2.5-7b", "qwen2.5-14b", "deepseek-r1-distill-llama-8b"],
-    fallbacks: [
-      "@cf/meta/llama-3.2-3b-instruct",
-      "@cf/meta/llama-3.2-1b-instruct",
-      "@cf/qwen/qwen2.5-7b-instruct",
-      "@cf/qwen/qwen2.5-14b-instruct",
-      "@cf/deepseek-ai/deepseek-r1-distill-llama-8b",
-      "@cf/zai-org/glm-4.7-flash",
-      "@cf/meta/llama-3.1-8b-instruct",
-    ]
-  },
-  vision: {
-    name: "👁️ Vision Models (Llama 3.2 Vision...)",
-    prompt: "Choose vision model",
-    keywords: ["vision", "llava"],
-    fallbacks: [
-      "@cf/meta/llama-3.2-11b-vision-instruct",
-    ]
-  }
-};
-
 export interface PontisEnv {
   clientCmd?: string;
   model?: string;
@@ -111,13 +46,6 @@ export interface PontisEnv {
   upstreamUrl?: string;
   upstreamFormat?: string;
 }
-
-export const LOCAL_FALLBACK_MODELS = [
-  "llama3",
-  "qwen2.5-coder",
-  "mistral",
-  "deepseek-coder-v2",
-];
 
 /** Parse a string into a known provider, or null if unrecognized. */
 export function normalizeProvider(value?: string | null): ProviderType | null {
@@ -164,12 +92,12 @@ export function getLocalApiKey(): string {
 export function getDefaultModelForProvider(provider?: ProviderType | string | null): string {
   switch (provider) {
     case "cloudflare":
-      return CLOUDFLARE_FALLBACK_MODELS[0];
+      return "@cf/moonshotai/kimi-k2.6";
     case "local":
-      return LOCAL_FALLBACK_MODELS[0];
+      return "llama3";
     case "opencode":
     default:
-      return FALLBACK_MODELS[0];
+      return "mimo-v2.5-free";
   }
 }
 
@@ -206,9 +134,28 @@ export interface ResolveInput {
   hasCloudflareConfig: boolean;
 }
 
+const OPENCODE_SPECIFIC_MODELS = new Set([
+  "mimo-v2.5-free",
+  "deepseek-v4-flash-free",
+  "nemotron-3.5-lightning-free",
+  "nemotron-3-ultra-free",
+  "hy3-free",
+  "laguna-s-2.1-free",
+  "qwen3.6-plus",
+  "qwen3.7-plus",
+  "kimi-k3",
+  "minimax-m3",
+  "minimax-m2.7",
+  "minimax-m2.5",
+  "glm-5.2",
+  "grok-4.6",
+  "grok-4.5",
+  "gemini-3.7-flash",
+]);
+
 /**
  * Check if a model string is compatible with a given provider.
- * Prevents cross-provider model bleed (e.g. @cf/... sent to OpenCode).
+ * Prevents cross-provider model bleed (e.g. @cf/... sent to OpenCode, mimo-... sent to Local).
  */
 export function isModelCompatibleWithProvider(
   model: string | undefined | null,
@@ -222,7 +169,7 @@ export function isModelCompatibleWithProvider(
     return !model.startsWith("@cf/") && !model.startsWith("http://") && !model.startsWith("https://");
   }
   if (provider === "local") {
-    return !model.startsWith("@cf/");
+    return !model.startsWith("@cf/") && !model.endsWith("-free") && !OPENCODE_SPECIFIC_MODELS.has(model);
   }
   return true;
 }

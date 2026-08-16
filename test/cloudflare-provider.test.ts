@@ -125,9 +125,8 @@ describe('Cloudflare Provider', () => {
         }),
       });
 
-      // setupCloudflareInteractive: select(category), select(model)
+      // setupCloudflareInteractive: select(model)
       vi.mocked(ui.select)
-        .mockResolvedValueOnce({ index: 0, value: '🚀 Flagship / Coding' })  // category
         .mockResolvedValueOnce({ index: 0, value: '@cf/moonshotai/kimi-k2.6' });  // model
 
       const result = await setupCloudflareInteractive();
@@ -139,23 +138,19 @@ describe('Cloudflare Provider', () => {
       });
     });
 
-    it('should use fallback models when API call fails', async () => {
+    it('should prompt for manual model ID when API call fails', async () => {
       // Setup mock UI responses in call order
       vi.mocked(ui.input)
         .mockResolvedValueOnce('test-account')  // Account ID
         .mockResolvedValueOnce('default')         // Gateway ID
-        .mockResolvedValueOnce('test-token');     // API Token
+        .mockResolvedValueOnce('test-token')     // API Token
+        .mockResolvedValueOnce('@cf/moonshotai/kimi-k2.6'); // Manual model ID input
       vi.mocked(ui.confirm).mockResolvedValueOnce(true);
 
       // fetchCloudflareModels returns empty (API call fails)
       global.fetch = vi.fn().mockResolvedValue({
         ok: false,
       });
-
-      // Fallback models are used — select(category), then select(model from fallbacks)
-      vi.mocked(ui.select)
-        .mockResolvedValueOnce({ index: 0, value: '🚀 Flagship / Coding' })  // category
-        .mockResolvedValueOnce({ index: 0, value: '@cf/moonshotai/kimi-k2.6' });  // model (from fallback)
 
       const result = await setupCloudflareInteractive();
 
@@ -171,7 +166,7 @@ describe('Cloudflare Provider', () => {
         .mockResolvedValueOnce('test-token');     // API Token
       vi.mocked(ui.confirm).mockResolvedValueOnce(true);
 
-      // fetchCloudflareModels returns models (but we go straight to custom input)
+      // fetchCloudflareModels returns models
       global.fetch = vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -180,9 +175,9 @@ describe('Cloudflare Provider', () => {
         }),
       });
 
-      // First select returns index 4 = "✏️ Enter Custom Model ID" (custom input)
+      // Select returns "✏️ Enter Custom Model ID" (index 1)
       vi.mocked(ui.select)
-        .mockResolvedValueOnce({ index: 4, value: '✏️ Enter Custom Model ID' });
+        .mockResolvedValueOnce({ index: 1, value: '✏️ Enter Custom Model ID' });
       // Then input is called for custom model ID
       vi.mocked(ui.input).mockResolvedValueOnce('@cf/custom-model');
 
