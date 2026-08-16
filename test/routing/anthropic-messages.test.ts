@@ -71,6 +71,28 @@ describe('POST /v1/messages — Anthropic endpoint', () => {
     }));
   });
 
+  it('routes enterprise/paid models on root /v1/messages to OpenCode Go', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const request = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({ model: 'qwen3.7-plus', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+
+    await worker.fetch(request);
+
+    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/go/v1/chat/completions', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ Authorization: `Bearer ${key}` }),
+    }));
+  });
+
   it('preserves upstream rate limit headers on translated errors', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('{"error":"FreeUsageLimitError"}', {

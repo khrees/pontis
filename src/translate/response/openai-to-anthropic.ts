@@ -49,9 +49,11 @@ export function formatOpenAIToAnthropic(completion: OpenAIResponse, model: strin
   // Map OpenAI finish_reason to Anthropic stop_reason
   const finishReason = completion.choices?.[0]?.finish_reason;
   let stopReason: AnthropicResponse["stop_reason"] = "end_turn";
-  if (finishReason === "tool_calls") stopReason = "tool_use";
-  else if (finishReason === "length") stopReason = "max_tokens";
-  else if (finishReason === "stop") stopReason = "end_turn";
+  if (finishReason === "tool_calls") {
+    stopReason = "tool_use";
+  } else if (finishReason === "length") {
+    stopReason = "max_tokens";
+  }
 
   const result: AnthropicResponse = {
     id: messageId,

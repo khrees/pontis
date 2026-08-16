@@ -20,42 +20,44 @@ const memoryStore: Record<string, string> = {};
 // Crypto module import
 const crypto = cryptoModule && typeof cryptoModule.randomBytes === 'function' ? cryptoModule : null;
 
-const STORAGE_DIR = join(homedir(), '.pontis');
-const CREDENTIALS_FILE = join(STORAGE_DIR, 'credentials.enc');
-const SALT_FILE = join(STORAGE_DIR, '.salt');
+function getStorageDir(): string {
+  return process.env.PONTIS_DIR || join(homedir(), '.pontis');
+}
+function getCredentialsFile(): string {
+  return join(getStorageDir(), 'credentials.enc');
+}
+function getSecretKeyFile(): string {
+  return join(getStorageDir(), '.secret');
+}
 
 // Ensure storage directory exists
 function ensureStorageDir(): void {
-  if (!existsSync(STORAGE_DIR)) {
-    mkdirSync(STORAGE_DIR, { mode: 0o700 });
+  const dir = getStorageDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { mode: 0o700, recursive: true });
   }
 }
 
-// Generate or load encryption key
+// Generate or load persistent encryption key
 function getEncryptionKey(): Buffer {
   if (!crypto) {
     throw new Error('Crypto module not available');
   }
   
   ensureStorageDir();
-  
-  // Use a combination of machine-specific factors for key derivation
-  const machineId = process.env.USER || process.env.USERNAME || 'default';
-  const hostname = process.env.HOSTNAME || 'localhost';
-  const platform = process.platform;
-  
-  // Generate salt
-  let salt: Buffer;
-  if (existsSync(SALT_FILE)) {
-    salt = readFileSync(SALT_FILE);
-  } else {
-    salt = crypto.randomBytes(32);
-    writeFileSync(SALT_FILE, salt, { mode: 0o600 });
+  const secretFile = getSecretKeyFile();
+  if (existsSync(secretFile)) {
+    try {
+      const key = readFileSync(secretFile);
+      if (key.length === 32) return key;
+    } catch {}
   }
   
-  // Derive key using scrypt
-  const keyMaterial = `${machineId}:${hostname}:${platform}`;
-  return crypto.scryptSync(keyMaterial, salt, 32);
+  const newKey = crypto.randomBytes(32);
+  try {
+    writeFileSync(secretFile, newKey, { mode: 0o600 });
+  } catch {}
+  return newKey;
 }
 
 // Encrypt data using AES-256-GCM
@@ -80,7 +82,7 @@ function encrypt(data: string): { encrypted: string; iv: string; authTag: string
   };
 }
 
-// Decrypt data using AES-256-GCM
+// Decrypt data using AES-256-GCM with persistent encryption key
 function decrypt(encryptedData: string, ivHex: string, authTagHex: string): string {
   if (!crypto) {
     throw new Error('Crypto module not available');
@@ -111,12 +113,13 @@ interface CredentialStore {
 
 // Load credential store
 function loadCredentialStore(): CredentialStore {
-  if (!existsSync(CREDENTIALS_FILE)) {
+  const file = getCredentialsFile();
+  if (!existsSync(file)) {
     return {};
   }
   
   try {
-    const data = readFileSync(CREDENTIALS_FILE, 'utf8');
+    const data = readFileSync(file, 'utf8');
     return JSON.parse(data) as CredentialStore;
   } catch {
     return {};
@@ -126,7 +129,7 @@ function loadCredentialStore(): CredentialStore {
 // Save credential store
 function saveCredentialStore(store: CredentialStore): void {
   ensureStorageDir();
-  writeFileSync(CREDENTIALS_FILE, JSON.stringify(store, null, 2), {
+  writeFileSync(getCredentialsFile(), JSON.stringify(store, null, 2), {
     mode: 0o600,
   });
 }
@@ -170,9 +173,6 @@ export function retrieveCredential(key: string): string | null {
   try {
     return decrypt(entry.encrypted, entry.iv, entry.authTag);
   } catch {
-    // If decryption fails, remove the corrupted entry
-    delete store[key];
-    saveCredentialStore(store);
     return null;
   }
 }
@@ -220,48 +220,15 @@ export function clearAllCredentials(): void {
     return;
   }
   
-  if (existsSync(CREDENTIALS_FILE)) {
+  const file = getCredentialsFile();
+  if (existsSync(file)) {
     if (crypto) {
       // Securely delete by overwriting with random data
       const randomData = crypto.randomBytes(1024);
-      writeFileSync(CREDENTIALS_FILE, randomData.toString('hex'));
+      writeFileSync(file, randomData.toString('hex'));
     }
     // Then delete the file
-    unlinkSync(CREDENTIALS_FILE);
-  }
-}
-
-// Migration utility: migrate from plain text to encrypted storage
-export function migrateFromPlainText(
-  plainTextFile: string,
-  credentialKey: string
-): boolean {
-  if (!isNodeEnvironment || !crypto) {
-    // No migration needed in non-Node environments
-    return false;
-  }
-  
-  try {
-    if (!existsSync(plainTextFile)) {
-      return false;
-    }
-    
-    const plainTextKey = readFileSync(plainTextFile, 'utf8').trim();
-    if (!plainTextKey) {
-      return false;
-    }
-    
-    // Store in encrypted format
-    storeCredential(credentialKey, plainTextKey);
-    
-    // Securely delete the plain text file
-    const randomData = crypto.randomBytes(1024);
-    writeFileSync(plainTextFile, randomData.toString('hex'));
-    unlinkSync(plainTextFile);
-    
-    return true;
-  } catch {
-    return false;
+    unlinkSync(file);
   }
 }
 

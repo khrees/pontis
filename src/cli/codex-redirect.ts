@@ -10,10 +10,10 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve4 } from "node:dns/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { badge } from "./ui";
 
 const HOSTS_FILE = "/etc/hosts";
@@ -83,11 +83,15 @@ export function removeHostsEntry(): void {
       (line) => !line.includes(HOSTS_MARKER),
     );
     if (lines.length !== content.split("\n").length) {
-      // Write to temp file then sudo copy
-      const tmp = "/tmp/pontis-hosts";
-      writeFileSync(tmp, lines.join("\n") + "\n");
-      execSync(`sudo cp "${tmp}" "${HOSTS_FILE}"`, { stdio: "inherit" });
-      execSync(`rm -f "${tmp}"`);
+      // Write to a private temp dir, then sudo copy into place
+      const tmpDir = mkdtempSync(join(tmpdir(), "pontis-"));
+      try {
+        const tmp = join(tmpDir, "hosts");
+        writeFileSync(tmp, lines.join("\n") + "\n", { mode: 0o600 });
+        execSync(`sudo cp "${tmp}" "${HOSTS_FILE}"`, { stdio: "inherit" });
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
     }
   } catch {
     // Best effort
@@ -107,13 +111,17 @@ export function addPfRule(): boolean {
     const rule =
       `rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port ${REDIRECT_PORT}`;
 
-    // Write the anchor file and load it
-    const tmp = "/tmp/pontis-pf.conf";
-    writeFileSync(tmp, `${rule}\n`);
-    execSync(`sudo pfctl -a ${PF_ANCHOR} -f "${tmp}" 2>/dev/null`, {
-      stdio: "inherit",
-    });
-    execSync(`rm -f "${tmp}"`);
+    // Write the anchor file to a private temp dir and load it
+    const tmpDir = mkdtempSync(join(tmpdir(), "pontis-"));
+    try {
+      const tmp = join(tmpDir, "pf.conf");
+      writeFileSync(tmp, `${rule}\n`, { mode: 0o600 });
+      execSync(`sudo pfctl -a ${PF_ANCHOR} -f "${tmp}" 2>/dev/null`, {
+        stdio: "inherit",
+      });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
 
     // Enable pf if not already running
     execSync(`sudo pfctl -e 2>/dev/null`, { stdio: "ignore" });
@@ -223,8 +231,9 @@ export function isHostsEntryActive(): boolean {
  */
 export function isPfRuleActive(): boolean {
   try {
-    const out = execSync(`sudo pfctl -a ${PF_ANCHOR} -s rules 2>/dev/null || true`, {
+    const out = execSync(`sudo -n pfctl -a ${PF_ANCHOR} -s rules 2>/dev/null || true`, {
       stdio: "pipe",
+      timeout: 1000,
     }).toString().trim();
     return out.length > 0;
   } catch {
@@ -277,7 +286,7 @@ export function isApiOpenaiMisdirected(): boolean {
       const hostnames = parts.slice(1);
       if (
         hostnames.includes("api.openai.com") &&
-        (ip === "127.0.0.1" || ip === "127.0.0.1" || ip === "0.0.0.0" || ip === "::1")
+        (ip.startsWith("127.") || ip === "0.0.0.0" || ip === "::1")
       ) {
         return true;
       }

@@ -84,7 +84,7 @@ export function formatAnthropicToOpenAI(body: AnthropicRequest): OpenAIRequest {
             }
           });
 
-           if (text !== "") assistantMsg.content = text;
+          if (text !== "") assistantMsg.content = text;
           if (reasoningContent !== "") {
             assistantMsg.reasoning_content = reasoningContent;
             (assistantMsg as any).reasoning = reasoningContent;

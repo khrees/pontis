@@ -291,9 +291,11 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream<Uint8Array>
 
       // Map finish reason and usage
       let stopReason = "end_turn";
-      if (finishReason === "tool_calls") stopReason = "tool_use";
-      else if (finishReason === "length") stopReason = "max_tokens";
-      else if (finishReason === "stop") stopReason = "end_turn";
+      if (finishReason === "tool_calls") {
+        stopReason = "tool_use";
+      } else if (finishReason === "length") {
+        stopReason = "max_tokens";
+      }
 
       enqueueSSE(controller, "message_delta", {
         type: "message_delta",

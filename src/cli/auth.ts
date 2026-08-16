@@ -3,7 +3,6 @@ import { section, kv, badge, t, select, input, confirm, outputJson, splash } fro
 import { redactKey } from "../redact";
 import {
   CLOUDFLARE_CONFIG_FILE,
-  LEGACY_KEY_FILE,
   getCloudflareConfigSaved,
   getOpenCodeApiKey,
   getLocalApiKey,
@@ -117,81 +116,93 @@ export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise
       `${t.primary("Local")}        ${t.muted("Ollama, LM Studio, Llama.cpp…")}`,
     ], { allowCustom: false, defaultIndex: 0 });
 
-    if (res.index === 0) provider = "opencode";
-    else if (res.index === 1) provider = "cloudflare";
-    else provider = "local";
+    switch (res.index) {
+      case 0:
+        provider = "opencode";
+        break;
+      case 1:
+        provider = "cloudflare";
+        break;
+      default:
+        provider = "local";
+        break;
+    }
   }
 
-  if (provider === "opencode") {
-    section("Configure OpenCode API Key");
-    let key = keyArg;
-    if (!key) {
-      console.log(`  Get your key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys\n`);
-      key = await input("Paste your OpenCode API key", undefined, true);
+  switch (provider) {
+    case "opencode": {
+      section("Configure OpenCode API Key");
+      let key = keyArg;
+      if (!key) {
+        console.log(`  Get your key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys\n`);
+        key = await input("Paste your OpenCode API key", undefined, true);
+      }
+      if (!key) {
+        badge("error", "API key cannot be empty.");
+        process.exit(1);
+      }
+
+      storeOpenCodeApiKey(key.trim());
+      badge("success", "OpenCode API key saved securely");
+      break;
     }
-    if (!key) {
-      badge("error", "API key cannot be empty.");
+    case "cloudflare": {
+      section("Configure Cloudflare AI Gateway");
+      const saved = getCloudflareConfigSaved();
+
+      const accountId = await input("Paste your Cloudflare Account ID", saved.accountId);
+      if (!accountId) {
+        badge("error", "Account ID is required.");
+        process.exit(1);
+      }
+
+      const gatewayId = await input("Paste your Cloudflare AI Gateway ID", saved.gatewayId || "default");
+      if (!gatewayId) {
+        badge("error", "Gateway ID is required.");
+        process.exit(1);
+      }
+
+      const apiToken = keyArg || (await input("Paste your Cloudflare API Token (API Key)", saved.apiToken, true));
+      if (!apiToken) {
+        badge("error", "API Token is required.");
+        process.exit(1);
+      }
+
+      const config = { accountId: accountId.trim(), gatewayId: gatewayId.trim(), apiToken: apiToken.trim() };
+      writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify(config, null, 2), {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      storeCloudflareApiToken(config.apiToken);
+
+      badge("success", "Cloudflare AI Gateway configuration saved securely");
+      break;
+    }
+    case "local": {
+      section("Configure Local Provider");
+      const prefs = getPreferences();
+      const detected = await detectRunningLocalEngine();
+      const defaultUrl = prefs.localEndpoint || detected?.url || "http://localhost:11434/v1";
+
+      const endpoint = await input("Enter local endpoint URL", defaultUrl);
+      savePreferences({ localEndpoint: endpoint.trim() });
+
+      const key = keyArg !== undefined
+        ? keyArg
+        : await input("Enter local API key (optional, press Enter to skip)", undefined, true);
+
+      if (key && key.trim()) {
+        storeLocalApiKey(key.trim());
+        badge("success", "Local endpoint and API key saved");
+      } else {
+        badge("success", "Local endpoint saved (no API key required)");
+      }
+      break;
+    }
+    default: {
+      badge("error", `Unknown provider "${provider}". Use: opencode | cloudflare | local`);
       process.exit(1);
     }
-
-    storeOpenCodeApiKey(key.trim());
-    if (existsSync(LEGACY_KEY_FILE)) {
-      try { unlinkSync(LEGACY_KEY_FILE); } catch {}
-    }
-
-    badge("success", "OpenCode API key saved securely");
-  } else if (provider === "cloudflare") {
-    section("Configure Cloudflare AI Gateway");
-    const saved = getCloudflareConfigSaved();
-
-    const accountId = await input("Paste your Cloudflare Account ID", saved.accountId);
-    if (!accountId) {
-      badge("error", "Account ID is required.");
-      process.exit(1);
-    }
-
-    const gatewayId = await input("Paste your Cloudflare AI Gateway ID", saved.gatewayId || "default");
-    if (!gatewayId) {
-      badge("error", "Gateway ID is required.");
-      process.exit(1);
-    }
-
-    const apiToken = keyArg || (await input("Paste your Cloudflare API Token (API Key)", saved.apiToken, true));
-    if (!apiToken) {
-      badge("error", "API Token is required.");
-      process.exit(1);
-    }
-
-    const config = { accountId: accountId.trim(), gatewayId: gatewayId.trim(), apiToken: apiToken.trim() };
-    writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify(config, null, 2), {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-    storeCloudflareApiToken(config.apiToken);
-
-    badge("success", "Cloudflare AI Gateway configuration saved securely");
-  } else if (provider === "local") {
-    section("Configure Local Provider");
-    const prefs = getPreferences();
-    const detected = await detectRunningLocalEngine();
-    const defaultUrl = prefs.localEndpoint || detected?.url || "http://localhost:11434/v1";
-
-    const endpoint = await input("Enter local endpoint URL", defaultUrl);
-    savePreferences({ localEndpoint: endpoint.trim() });
-
-    const key = keyArg !== undefined
-      ? keyArg
-      : await input("Enter local API key (optional, press Enter to skip)", undefined, true);
-
-    if (key && key.trim()) {
-      storeLocalApiKey(key.trim());
-      badge("success", "Local endpoint and API key saved");
-    } else {
-      badge("success", "Local endpoint saved (no API key required)");
-    }
-  } else {
-    badge("error", `Unknown provider "${provider}". Use: opencode | cloudflare | local`);
-    process.exit(1);
   }
 }
 
@@ -212,11 +223,22 @@ export async function cmdAuthRemove(providerArg?: string): Promise<void> {
     ];
 
     const res = await select("Which credentials do you want to remove?", choices, { allowCustom: false });
-    if (res.index === 0) provider = "opencode";
-    else if (res.index === 1) provider = "cloudflare";
-    else if (res.index === 2) provider = "local";
-    else if (res.index === 3) provider = "all";
-    else return;
+    switch (res.index) {
+      case 0:
+        provider = "opencode";
+        break;
+      case 1:
+        provider = "cloudflare";
+        break;
+      case 2:
+        provider = "local";
+        break;
+      case 3:
+        provider = "all";
+        break;
+      default:
+        return;
+    }
   }
 
   if (provider === "all") {
@@ -224,27 +246,32 @@ export async function cmdAuthRemove(providerArg?: string): Promise<void> {
     return;
   }
 
-  if (provider === "opencode") {
-    deleteOpenCodeApiKey();
-    if (existsSync(LEGACY_KEY_FILE)) {
-      try { unlinkSync(LEGACY_KEY_FILE); } catch {}
+  switch (provider) {
+    case "opencode": {
+      deleteOpenCodeApiKey();
+      badge("success", "OpenCode API key removed");
+      break;
     }
-    badge("success", "OpenCode API key removed");
-  } else if (provider === "cloudflare") {
-    deleteCloudflareApiToken();
-    if (existsSync(CLOUDFLARE_CONFIG_FILE)) {
-      try { unlinkSync(CLOUDFLARE_CONFIG_FILE); } catch {}
+    case "cloudflare": {
+      deleteCloudflareApiToken();
+      if (existsSync(CLOUDFLARE_CONFIG_FILE)) {
+        try { unlinkSync(CLOUDFLARE_CONFIG_FILE); } catch {}
+      }
+      badge("success", "Cloudflare configuration and token removed");
+      break;
     }
-    badge("success", "Cloudflare configuration and token removed");
-  } else if (provider === "local") {
-    deleteLocalApiKey();
-    const prefs = getPreferences();
-    delete prefs.localEndpoint;
-    savePreferences(prefs);
-    badge("success", "Local custom key and endpoint configuration removed");
-  } else {
-    badge("error", `Unknown provider "${provider}". Use: opencode | cloudflare | local | all`);
-    process.exit(1);
+    case "local": {
+      deleteLocalApiKey();
+      const prefs = getPreferences();
+      delete prefs.localEndpoint;
+      savePreferences(prefs);
+      badge("success", "Local custom key and endpoint configuration removed");
+      break;
+    }
+    default: {
+      badge("error", `Unknown provider "${provider}". Use: opencode | cloudflare | local | all`);
+      process.exit(1);
+    }
   }
 }
 
@@ -259,9 +286,6 @@ export async function cmdAuthClear(silent = false): Promise<void> {
 
   clearAllCredentials();
 
-  if (existsSync(LEGACY_KEY_FILE)) {
-    try { unlinkSync(LEGACY_KEY_FILE); } catch {}
-  }
   if (existsSync(CLOUDFLARE_CONFIG_FILE)) {
     try { unlinkSync(CLOUDFLARE_CONFIG_FILE); } catch {}
   }
@@ -285,11 +309,15 @@ export async function cmdAuthInteractive(): Promise<void> {
 
   const res = await select("Authentication Management", choices, { allowCustom: false, defaultIndex: 0 });
 
-  if (res.index === 0) {
-    await cmdAuthSet();
-  } else if (res.index === 1) {
-    await cmdAuthRemove();
-  } else if (res.index === 2) {
-    await cmdAuthClear();
+  switch (res.index) {
+    case 0:
+      await cmdAuthSet();
+      break;
+    case 1:
+      await cmdAuthRemove();
+      break;
+    case 2:
+      await cmdAuthClear();
+      break;
   }
 }

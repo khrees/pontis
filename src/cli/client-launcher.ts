@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { t, SYM, badge, kv, confirm, createSpinner, warn } from "./ui";
+import { t, SYM, badge, kv, createSpinner, warn } from "./ui";
 import { redactKey } from "../redact";
 import { PROXY_URL } from "./proxy-manager";
 import { PI_AGENT_DIR, PI_MODELS_FILE, OPENCODE_AUTH_FILE, OPENCODE_DATA_DIR } from "./config";
@@ -302,16 +302,14 @@ export function launchClient(
   extraArgs: string[],
 ): Promise<void> {
   // Section header
-  const clientDisplayName =
-    clientCmd === "codex"
-      ? "Codex"
-      : clientCmd === "server"
-        ? "Server Mode"
-        : clientCmd === "pi"
-          ? "Pi"
-          : clientCmd === "opencode"
-            ? "OpenCode"
-            : "Claude Code";
+  const CLIENT_DISPLAY_NAMES: Record<string, string> = {
+    codex: "Codex",
+    server: "Server Mode",
+    pi: "Pi",
+    opencode: "OpenCode",
+    claude: "Claude Code",
+  };
+  const clientDisplayName = CLIENT_DISPLAY_NAMES[clientCmd] || "Claude Code";
   console.log(
     `\n  ${t.primary(SYM.bullet)}  ${t.bold("Launching " + clientDisplayName)}`,
   );
@@ -333,49 +331,54 @@ export function launchClient(
     string
   >;
 
-  if (clientCmd === "codex") {
-    // Follow Ollama's approach: --oss flag + OPENAI_BASE_URL + dummy API key.
-    // This tells Codex to use OpenAI-compatible HTTP API directly,
-    // no WebSocket, no api.openai.com traffic at all.
-    childEnv.OPENAI_BASE_URL = `${PROXY_URL}/v1`;
-    childEnv.OPENAI_API_KEY = apiKey;
-    extraArgs = ["--oss", ...extraArgs];
-    if (!extraArgs.includes("--model") && !extraArgs.includes("-m")) {
-      extraArgs = extraArgs.concat("--model", model);
-    }
-  } else if (clientCmd === "pi") {
-    // Pi uses a custom provider written to models.json that points at the proxy.
-    // The API key is embedded in that provider config, but we also pass --api-key
-    // which is the most reliable way Pi resolves credentials (takes priority over
-    // models.json and env vars).
-    childEnv.PONTIS_API_KEY = apiKey;
-    childEnv.OPENAI_API_KEY = apiKey;
-    extraArgs = [
-      "--provider",
-      PI_PROVIDER_NAME,
-      "--model",
-      model,
-      "--api-key",
-      apiKey,
-      ...extraArgs,
-    ];
-  } else if (clientCmd === "opencode") {
-    // OpenCode uses provider/model notation and reads credentials from
-    // ~/.local/share/opencode/auth.json (not env vars).
-    // The auth file was written by setupOpenCodeProvider() before launch.
-    // We pass the model as openai/<model> since Pontis speaks OpenAI format.
-    if (!extraArgs.includes("--model")) {
-      extraArgs = ["--model", `openai/${model}`, ...extraArgs];
-    }
-    // Skip auto-fetch of models — we already know what we're using
-    childEnv.OPENCODE_DISABLE_MODELS_FETCH = "true";
-  } else {
-    // Claude Code
-    childEnv.ANTHROPIC_BASE_URL = `${PROXY_URL}/zen`;
-    childEnv.ANTHROPIC_API_KEY = apiKey;
-    childEnv.ANTHROPIC_MODEL = model;
-    childEnv.ANTHROPIC_SMALL_FAST_MODEL = model;
-    autoApproveClaudeKey(apiKey);
+  switch (clientCmd) {
+    case "codex":
+      // Follow Ollama's approach: --oss flag + OPENAI_BASE_URL + dummy API key.
+      // This tells Codex to use OpenAI-compatible HTTP API directly,
+      // no WebSocket, no api.openai.com traffic at all.
+      childEnv.OPENAI_BASE_URL = `${PROXY_URL}/v1`;
+      childEnv.OPENAI_API_KEY = apiKey;
+      extraArgs = ["--oss", ...extraArgs];
+      if (!extraArgs.includes("--model") && !extraArgs.includes("-m")) {
+        extraArgs = extraArgs.concat("--model", model);
+      }
+      break;
+    case "pi":
+      // Pi uses a custom provider written to models.json that points at the proxy.
+      // The API key is embedded in that provider config, but we also pass --api-key
+      // which is the most reliable way Pi resolves credentials (takes priority over
+      // models.json and env vars).
+      childEnv.PONTIS_API_KEY = apiKey;
+      childEnv.OPENAI_API_KEY = apiKey;
+      extraArgs = [
+        "--provider",
+        PI_PROVIDER_NAME,
+        "--model",
+        model,
+        "--api-key",
+        apiKey,
+        ...extraArgs,
+      ];
+      break;
+    case "opencode":
+      // OpenCode uses provider/model notation and reads credentials from
+      // ~/.local/share/opencode/auth.json (not env vars).
+      // The auth file was written by setupOpenCodeProvider() before launch.
+      // We pass the model as openai/<model> since Pontis speaks OpenAI format.
+      if (!extraArgs.includes("--model")) {
+        extraArgs = ["--model", `openai/${model}`, ...extraArgs];
+      }
+      // Skip auto-fetch of models — we already know what we're using
+      childEnv.OPENCODE_DISABLE_MODELS_FETCH = "true";
+      break;
+    default:
+      // Claude Code
+      childEnv.ANTHROPIC_BASE_URL = `${PROXY_URL}`;
+      childEnv.ANTHROPIC_API_KEY = apiKey;
+      childEnv.ANTHROPIC_MODEL = model;
+      childEnv.ANTHROPIC_SMALL_FAST_MODEL = model;
+      autoApproveClaudeKey(apiKey);
+      break;
   }
 
   const displayArgs = extraArgs.map((a) =>
@@ -405,10 +408,11 @@ export function launchClient(
 export async function testConnectivity(
   apiKey: string,
   model: string,
+  provider?: string,
 ): Promise<boolean> {
   const spin = createSpinner("Verifying API connection...");
   try {
-    const res = await fetch(`${PROXY_URL}/zen/v1/messages`, {
+    const res = await fetch(`${PROXY_URL}/v1/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -426,22 +430,67 @@ export async function testConnectivity(
       spin.stop({ type: "success", text: "API connected successfully" });
       return true;
     }
-    if (res.status === 401) {
+
+    const bodyText = await res.text();
+    let errorObj: any = null;
+    try {
+      errorObj = JSON.parse(bodyText);
+    } catch {}
+
+    const isModelError =
+      errorObj?.error?.type === "ModelError" ||
+      errorObj?.type === "ModelError";
+
+    const errorMsg = errorObj?.error?.message || errorObj?.message;
+
+    if (isModelError) {
       spin.stop({
         type: "error",
-        text: "API returned 401 — check your API key",
+        text: `Model error (HTTP ${res.status}): ${errorMsg || `Model "${model}" is not supported by upstream`}`,
       });
-      const body = await res.text();
-      console.log(`  ${t.muted(body.slice(0, 200))}\n`);
-      return await confirm("Continue anyway?", false);
+      if (bodyText && !errorMsg) {
+        console.log(`  ${t.muted(bodyText.slice(0, 200))}\n`);
+      }
+      console.log(`  ${t.warning(SYM.warn)} Pick a different model with: ${t.primary("pontis models")}, then ${t.primary("pontis config set model <id>")}\n`);
+      return false;
     }
-    spin.stop({ type: "warning", text: `HTTP ${res.status} — continuing` });
-    return true;
-  } catch {
+
+    if (res.status === 401 || res.status === 403) {
+      spin.stop({
+        type: "error",
+        text: `Authentication failed (HTTP ${res.status}) — check your API credentials`,
+      });
+      if (bodyText) {
+        console.log(`  ${t.muted(bodyText.slice(0, 200))}\n`);
+      }
+      switch (provider) {
+        case "opencode":
+          console.log(`  ${t.warning(SYM.warn)} Configure a valid OpenCode API key with: ${t.primary("pontis auth set opencode")}\n`);
+          break;
+        case "cloudflare":
+          console.log(`  ${t.warning(SYM.warn)} Configure Cloudflare credentials with: ${t.primary("pontis auth set cloudflare")}\n`);
+          break;
+        case "local":
+          console.log(`  ${t.warning(SYM.warn)} Verify your local AI engine or configure with: ${t.primary("pontis auth set local")}\n`);
+          break;
+        default:
+          console.log(`  ${t.warning(SYM.warn)} Configure your credentials with: ${t.primary("pontis auth")}\n`);
+          break;
+      }
+      return false;
+    }
+
+    spin.stop({ type: "error", text: `API request failed (HTTP ${res.status})` });
+    if (bodyText) {
+      console.log(`  ${t.muted(bodyText.slice(0, 200))}\n`);
+    }
+    return false;
+  } catch (err: any) {
     spin.stop({
-      type: "warning",
-      text: "Could not reach API — continuing anyway",
+      type: "error",
+      text: `Could not reach API: ${err?.message || "connection failed"}`,
     });
-    return true;
+    console.log(`  ${t.warning(SYM.warn)} Ensure the proxy upstream is reachable and credentials are valid.\n`);
+    return false;
   }
 }

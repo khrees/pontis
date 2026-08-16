@@ -10,10 +10,12 @@ import { runInteractiveWizard, runWithConfig } from "./wizard";
 import {
   CLOUDFLARE_CONFIG_FILE,
   PROXY_LOG,
-  FALLBACK_MODELS,
-  CLOUDFLARE_FALLBACK_MODELS,
   getCloudflareConfigSaved,
   getOpenCodeApiKey,
+  normalizeProvider,
+  resolveActiveProviderAndModel,
+  getDefaultModelForProvider,
+  isModelCompatibleWithProvider,
   type PontisEnv,
 } from "./config";
 import {
@@ -373,21 +375,42 @@ configCmd
   .description("Set a preference value (e.g. pontis config set model deepseek-v4-flash-free)")
   .action((key, value) => {
     const normKey = key.toLowerCase().trim();
-    if (normKey === "client") {
-      savePreferences({ defaultClient: value.toLowerCase() as ClientName | "server" });
-      badge("success", `Default client set to "${value}"`);
-    } else if (normKey === "provider") {
-      savePreferences({ defaultProvider: value.toLowerCase() as any });
-      badge("success", `Default provider set to "${value}"`);
-    } else if (normKey === "model") {
-      savePreferences({ defaultModel: value });
-      badge("success", `Default model set to "${value}"`);
-    } else if (normKey === "endpoint") {
-      savePreferences({ localEndpoint: value });
-      badge("success", `Local endpoint set to "${value}"`);
-    } else {
-      badge("error", `Unknown config key "${key}". Valid keys: client, provider, model, endpoint`);
-      process.exit(1);
+    switch (normKey) {
+      case "client":
+        savePreferences({ defaultClient: value.toLowerCase() as ClientName | "server" });
+        badge("success", `Default client set to "${value}"`);
+        break;
+      case "provider": {
+        const provider = normalizeProvider(value.toLowerCase());
+        if (!provider) {
+          badge("error", `Unknown provider "${value}". Valid providers: opencode, cloudflare, local`);
+          process.exit(1);
+        }
+        const prefs = getPreferences();
+        let newModel = prefs.providerModels?.[provider] || prefs.defaultModel;
+        if (!isModelCompatibleWithProvider(newModel, provider)) {
+          newModel = getDefaultModelForProvider(provider);
+        }
+        const providerModels = { ...(prefs.providerModels || {}), [provider]: newModel };
+        savePreferences({ defaultProvider: provider, defaultModel: newModel, providerModels });
+        badge("success", `Default provider set to "${provider}" (active model: ${newModel})`);
+        break;
+      }
+      case "model": {
+        const prefs = getPreferences();
+        const activeProvider = prefs.defaultProvider || "opencode";
+        const providerModels = { ...(prefs.providerModels || {}), [activeProvider]: value };
+        savePreferences({ defaultModel: value, providerModels });
+        badge("success", `Default model set to "${value}"`);
+        break;
+      }
+      case "endpoint":
+        savePreferences({ localEndpoint: value });
+        badge("success", `Local endpoint set to "${value}"`);
+        break;
+      default:
+        badge("error", `Unknown config key "${key}". Valid keys: client, provider, model, endpoint`);
+        process.exit(1);
     }
   });
 
@@ -411,126 +434,132 @@ program
   .action(async (opts) => {
     try {
       const prefs = getPreferences();
-      const provider: "opencode" | "local" | "cloudflare" =
-        opts.provider ||
-        (process.env.PONTIS_PROVIDER as "opencode" | "local" | "cloudflare") ||
-        prefs.defaultProvider ||
-        (process.env.PONTIS_UPSTREAM_URL ? "local" : "opencode");
+      const { provider } = resolveActiveProviderAndModel({
+        provider: opts.provider,
+        upstream: opts.upstream,
+      });
 
       let upstreamUrl = opts.upstream || process.env.PONTIS_UPSTREAM_URL || (provider === "local" ? prefs.localEndpoint : undefined);
 
-      if (provider === "cloudflare") {
-        const savedCf = getCloudflareConfigSaved();
-        const apiToken =
-          opts.apiKey || process.env.CLOUDFLARE_API_TOKEN || savedCf.apiToken;
-        const accountId =
-          process.env.CLOUDFLARE_ACCOUNT_ID || savedCf.accountId;
-        if (!apiToken || !accountId) {
-          const msg =
-            "Cloudflare API Token and Account ID are required. Run: pontis auth set cloudflare";
-          if (jsonMode) outputJsonError("missing_cloudflare_config", msg);
-          badge("error", msg);
-          process.exit(1);
-        }
-        const spin = jsonMode
-          ? null
-          : createSpinner("Fetching models from Cloudflare...");
-        const models = await fetchCloudflareModels(accountId, apiToken);
-        if (spin) {
-          spin.stop(
-            models.length > 0
-              ? {
-                  type: "success",
-                  text: `Found ${models.length} model${models.length === 1 ? "" : "s"}`,
-                }
-              : { type: "warning", text: "No models returned from Cloudflare" },
-          );
-        }
-        if (jsonMode) {
-          outputJson({
-            provider: "cloudflare",
-            models: models.map((id) => ({ id })),
-          });
-        }
-        if (models.length === 0) {
-          badge(
-            "warning",
-            "No models found. Check your API key and Account ID.",
-          );
-        } else {
-          section("Available Cloudflare Models");
-          for (const m of models) kv("Model", t.primary(m));
-        }
-      } else if (provider === "opencode") {
-        const apiKey = getOpenCodeApiKey() || "";
-        if (!apiKey) {
-          if (jsonMode)
-            outputJsonError(
-              "missing_api_key",
-              "No OpenCode API key found. Set OPENCODE_API_KEY or run: pontis auth set opencode",
+      switch (provider) {
+        case "cloudflare": {
+          const savedCf = getCloudflareConfigSaved();
+          const apiToken =
+            opts.apiKey || process.env.CLOUDFLARE_API_TOKEN || savedCf.apiToken;
+          const accountId =
+            process.env.CLOUDFLARE_ACCOUNT_ID || savedCf.accountId;
+          if (!apiToken || !accountId) {
+            const msg =
+              "Cloudflare API Token and Account ID are required. Run: pontis auth set cloudflare";
+            if (jsonMode) outputJsonError("missing_cloudflare_config", msg);
+            badge("error", msg);
+            process.exit(1);
+          }
+          const spin = jsonMode
+            ? null
+            : createSpinner("Fetching models from Cloudflare...");
+          const models = await fetchCloudflareModels(accountId, apiToken);
+          if (spin) {
+            spin.stop(
+              models.length > 0
+                ? {
+                    type: "success",
+                    text: `Found ${models.length} model${models.length === 1 ? "" : "s"}`,
+                  }
+                : { type: "warning", text: "No models returned from Cloudflare" },
             );
-          badge(
-            "error",
-            "No OpenCode API key found. Run: pontis auth set opencode",
-          );
-          process.exit(1);
+          }
+          if (jsonMode) {
+            outputJson({
+              provider: "cloudflare",
+              models: models.map((id) => ({ id })),
+            });
+          }
+          if (models.length === 0) {
+            badge(
+              "warning",
+              "No models found. Check your API key and Account ID.",
+            );
+          } else {
+            section("Available Cloudflare Models");
+            for (const m of models) kv("Model", t.primary(m));
+          }
+          break;
         }
-        const spin = jsonMode
-          ? null
-          : createSpinner("Fetching models from OpenCode...");
-        const models = await fetchWorkingOpenCodeModels(apiKey);
-        if (spin)
-          spin.stop(
-            models.length > 0
-              ? {
-                  type: "success",
-                  text: `${models.length} model${models.length === 1 ? "" : "s"} available`,
-                }
-              : { type: "warning", text: "No models found" },
-          );
-        if (jsonMode) {
-          outputJson({
-            provider: "opencode",
-            models: models.map((id) => ({ id })),
-          });
+        case "opencode": {
+          const apiKey = getOpenCodeApiKey() || "";
+          if (!apiKey) {
+            if (jsonMode)
+              outputJsonError(
+                "missing_api_key",
+                "No OpenCode API key found. Set OPENCODE_API_KEY or run: pontis auth set opencode",
+              );
+            badge(
+              "error",
+              "No OpenCode API key found. Run: pontis auth set opencode",
+            );
+            process.exit(1);
+          }
+          const spin = jsonMode
+            ? null
+            : createSpinner("Fetching models from OpenCode...");
+          const models = await fetchWorkingOpenCodeModels(apiKey);
+          if (spin)
+            spin.stop(
+              models.length > 0
+                ? {
+                    type: "success",
+                    text: `${models.length} model${models.length === 1 ? "" : "s"} available`,
+                  }
+                : { type: "warning", text: "No models found" },
+            );
+          if (jsonMode) {
+            outputJson({
+              provider: "opencode",
+              models: models.map((id) => ({ id })),
+            });
+          }
+          if (models.length === 0) {
+            badge("warning", "No models found. Check your API key.");
+          } else {
+            section("Available OpenCode Models");
+            for (const m of models) kv("Model", t.primary(m));
+          }
+          break;
         }
-        if (models.length === 0) {
-          badge("warning", "No models found. Check your API key.");
-        } else {
-          section("Available OpenCode Models");
-          for (const m of models) kv("Model", t.primary(m));
-        }
-      } else {
-        if (!upstreamUrl) {
-          upstreamUrl = "http://localhost:11434/v1";
-        }
-        const apiKey =
-          process.env.LOCAL_API_KEY || process.env.OPENAI_API_KEY || "";
-        const spin = jsonMode
-          ? null
-          : createSpinner(`Scanning models at ${upstreamUrl}...`);
-        const models = await fetchLocalModels(upstreamUrl, apiKey);
-        if (spin)
-          spin.stop(
-            models.length > 0
-              ? {
-                  type: "success",
-                  text: `Found ${models.length} model${models.length === 1 ? "" : "s"}`,
-                }
-              : { type: "warning", text: "No models returned from upstream" },
-          );
-        if (jsonMode) {
-          outputJson({
-            provider: "local",
-            upstream: upstreamUrl,
-            models: models.map((id) => ({ id })),
-          });
-        }
-        if (models.length === 0) {
-          badge("warning", "No models returned from upstream. Is your local engine running?");
-        } else {
-          section("Available Local Models");
-          for (const m of models) kv("Model", t.primary(m));
+        default: {
+          if (!upstreamUrl) {
+            upstreamUrl = "http://localhost:11434/v1";
+          }
+          const apiKey =
+            process.env.LOCAL_API_KEY || process.env.OPENAI_API_KEY || "";
+          const spin = jsonMode
+            ? null
+            : createSpinner(`Scanning models at ${upstreamUrl}...`);
+          const models = await fetchLocalModels(upstreamUrl, apiKey);
+          if (spin)
+            spin.stop(
+              models.length > 0
+                ? {
+                    type: "success",
+                    text: `Found ${models.length} model${models.length === 1 ? "" : "s"}`,
+                  }
+                : { type: "warning", text: "No models returned from upstream" },
+            );
+          if (jsonMode) {
+            outputJson({
+              provider: "local",
+              upstream: upstreamUrl,
+              models: models.map((id) => ({ id })),
+            });
+          }
+          if (models.length === 0) {
+            badge("warning", "No models returned from upstream. Is your local engine running?");
+          } else {
+            section("Available Local Models");
+            for (const m of models) kv("Model", t.primary(m));
+          }
+          break;
         }
       }
     } catch (e: any) {
@@ -560,22 +589,21 @@ program
       } catch {}
 
       const prefs = getPreferences();
-      const provider: string =
-        process.env.PONTIS_PROVIDER ||
-        prefs.defaultProvider ||
-        (process.env.PONTIS_UPSTREAM_URL ? "local" : "opencode");
-      const model =
-        process.env.PONTIS_MODEL ||
-        prefs.defaultModel ||
-        (provider === "cloudflare"
-          ? CLOUDFLARE_FALLBACK_MODELS[0]
-          : FALLBACK_MODELS[0]);
-      const upstream =
-        process.env.PONTIS_UPSTREAM_URL ||
-        prefs.localEndpoint ||
-        (provider === "cloudflare"
-          ? "(Cloudflare AI Gateway)"
-          : "(default OpenCode Zen)");
+      const { provider, model } = resolveActiveProviderAndModel();
+      let upstream = process.env.PONTIS_UPSTREAM_URL;
+      if (!upstream) {
+        switch (provider) {
+          case "local":
+            upstream = prefs.localEndpoint || "http://localhost:11434/v1";
+            break;
+          case "cloudflare":
+            upstream = "(Cloudflare AI Gateway)";
+            break;
+          default:
+            upstream = "(default OpenCode Zen)";
+            break;
+        }
+      }
       const format = process.env.PONTIS_UPSTREAM_FORMAT || "openai";
       const debug = process.env.PONTIS_DEBUG === "true";
       const keyExists =
@@ -604,6 +632,7 @@ program
             path: c.path,
           })),
         });
+        return;
       }
 
       section("Pontis Status");

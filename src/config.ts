@@ -10,6 +10,7 @@ import {
 } from "./env";
 import { extractApiKey, validateApiKey } from "./auth";
 import { InvalidApiKeyError } from "./errors";
+import { isFreeOpenCodeModel } from "./opencode-models";
 
 export const GO_UPSTREAM = getGoUpstream("https://opencode.ai/zen/go/v1");
 export const ZEN_UPSTREAM = getZenUpstream("https://opencode.ai/zen/v1");
@@ -168,10 +169,11 @@ export function selectUpstream(
   if (targetUpstream) return targetUpstream;
 
   const path = new URL(request.url).pathname;
-  const hasExplicitPrefix = path.startsWith("/go") || path.startsWith("/zen");
-  if (!hasExplicitPrefix && routeUpstream.includes("opencode.ai")) {
-    const isFree = model.endsWith("-free") || model === "big-pickle";
-    return isFree ? ZEN_UPSTREAM : GO_UPSTREAM;
+  if (path.startsWith("/go")) return GO_UPSTREAM;
+  if (path.startsWith("/zen")) return ZEN_UPSTREAM;
+
+  if (routeUpstream.includes("opencode.ai")) {
+    return isFreeOpenCodeModel(model) ? ZEN_UPSTREAM : GO_UPSTREAM;
   }
   return routeUpstream;
 }

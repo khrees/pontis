@@ -112,10 +112,13 @@ export async function setupCloudflareInteractive(): Promise<{
       : { type: "warning", text: "Using fallback model lists" },
   );
 
+  const categories = [
+    CLOUDFLARE_CATEGORIES.flagship,
+    CLOUDFLARE_CATEGORIES.cheap,
+    CLOUDFLARE_CATEGORIES.vision,
+  ];
   const categoryChoices = [
-    CLOUDFLARE_CATEGORIES.flagship.name,
-    CLOUDFLARE_CATEGORIES.cheap.name,
-    CLOUDFLARE_CATEGORIES.vision.name,
+    ...categories.map((c) => c.name),
     "📁 All Available Models (Full List)",
     "✏️ Enter Custom Model ID",
   ];
@@ -123,31 +126,15 @@ export async function setupCloudflareInteractive(): Promise<{
   const catResult = await select("Choose a model category", categoryChoices);
   let selectedModel = "";
 
-  if (catResult.index === 0) {
-    // Flagship
-    const matched = rawModels.filter(m =>
-      CLOUDFLARE_CATEGORIES.flagship.keywords.some(k => m.toLowerCase().includes(k))
+  const category = categories[catResult.index];
+  if (category) {
+    const matched = rawModels.filter((m) =>
+      category.keywords.some((k) => m.toLowerCase().includes(k)),
     );
-    const modelsToPresent = matched.length > 0 ? matched : CLOUDFLARE_CATEGORIES.flagship.fallbacks;
-    const modelRes = await select("Choose flagship/coding model", modelsToPresent);
+    const modelsToPresent = matched.length > 0 ? matched : category.fallbacks;
+    const modelRes = await select(category.prompt, modelsToPresent);
     selectedModel = modelRes.index === -1 ? await input("Enter model ID") : modelRes.value;
-  } else if (catResult.index === 1) {
-    // Cheap
-    const matched = rawModels.filter(m =>
-      CLOUDFLARE_CATEGORIES.cheap.keywords.some(k => m.toLowerCase().includes(k))
-    );
-    const modelsToPresent = matched.length > 0 ? matched : CLOUDFLARE_CATEGORIES.cheap.fallbacks;
-    const modelRes = await select("Choose lightweight model", modelsToPresent);
-    selectedModel = modelRes.index === -1 ? await input("Enter model ID") : modelRes.value;
-  } else if (catResult.index === 2) {
-    // Vision
-    const matched = rawModels.filter(m =>
-      CLOUDFLARE_CATEGORIES.vision.keywords.some(k => m.toLowerCase().includes(k))
-    );
-    const modelsToPresent = matched.length > 0 ? matched : CLOUDFLARE_CATEGORIES.vision.fallbacks;
-    const modelRes = await select("Choose vision model", modelsToPresent);
-    selectedModel = modelRes.index === -1 ? await input("Enter model ID") : modelRes.value;
-  } else if (catResult.index === 3) {
+  } else if (catResult.index === categories.length) {
     // Full List
     const modelsToPresent = rawModels.length > 0 ? rawModels : CLOUDFLARE_FALLBACK_MODELS;
     const modelRes = await select("Choose from all models", modelsToPresent);

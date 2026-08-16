@@ -546,31 +546,38 @@ export async function cmdClientsInteractive(): Promise<void> {
 
   const res = await select("Choose an action", choices, { allowCustom: false, defaultIndex: 0 });
 
-  if (res.index === 0) {
-    cmdClientsList();
-  } else if (res.index === 1) {
-    const clientChoices = ALL_CLIENTS.map((name) => {
-      const def = CLIENTS[name];
-      const isDef = name === defaultClient ? " (current default)" : "";
-      return `${def.name}${isDef}`;
-    });
-    clientChoices.push("Server Mode (Proxy only)");
+  switch (res.index) {
+    case 0:
+      cmdClientsList();
+      break;
+    case 1: {
+      const clientChoices = ALL_CLIENTS.map((name) => {
+        const def = CLIENTS[name];
+        const isDef = name === defaultClient ? " (current default)" : "";
+        return `${def.name}${isDef}`;
+      });
+      clientChoices.push("Server Mode (Proxy only)");
 
-    const clientRes = await select("Choose default client", clientChoices, { allowCustom: false, defaultIndex: 0 });
-    const selectedName = clientRes.index === ALL_CLIENTS.length ? "server" : ALL_CLIENTS[clientRes.index];
-    cmdClientsDefault(selectedName);
-  } else if (res.index === 2 && missing.length > 0) {
-    const installChoices = missing.map((c) => `Install ${c.displayName}`);
-    if (missing.length > 1) installChoices.push("Install all missing");
-    installChoices.push("Cancel");
+      const clientRes = await select("Choose default client", clientChoices, { allowCustom: false, defaultIndex: 0 });
+      const selectedName = clientRes.index === ALL_CLIENTS.length ? "server" : ALL_CLIENTS[clientRes.index];
+      cmdClientsDefault(selectedName);
+      break;
+    }
+    case 2: {
+      if (missing.length === 0) break;
+      const installChoices = missing.map((c) => `Install ${c.displayName}`);
+      if (missing.length > 1) installChoices.push("Install all missing");
+      installChoices.push("Cancel");
 
-    const installRes = await select("Select client to install", installChoices, { allowCustom: false });
-    if (installRes.index < missing.length) {
-      await installClient(missing[installRes.index].name, { interactive: false });
-    } else if (installRes.index === missing.length && missing.length > 1) {
-      for (const m of missing) {
-        await installClient(m.name, { interactive: false });
+      const installRes = await select("Select client to install", installChoices, { allowCustom: false });
+      if (installRes.index < missing.length) {
+        await installClient(missing[installRes.index].name, { interactive: false });
+      } else if (installRes.index === missing.length && missing.length > 1) {
+        for (const m of missing) {
+          await installClient(m.name, { interactive: false });
+        }
       }
+      break;
     }
   }
 }

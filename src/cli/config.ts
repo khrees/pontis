@@ -6,9 +6,13 @@ import {
   retrieveOpenCodeApiKey,
   retrieveCloudflareApiToken,
   retrieveLocalApiKey,
-  migrateFromPlainText,
-  CREDENTIAL_KEYS,
 } from "../secure-storage";
+import {
+  getPreferences,
+  getPontisDir,
+  type PontisPreferences,
+  type ProviderType,
+} from "./preferences";
 
 const __CLI_DIR = dirname(fileURLToPath(import.meta.url));
 // In dev mode (tsx running src/cli/index.ts), ROOT is the project root (parent of src/).
@@ -17,15 +21,12 @@ export const ROOT = existsSync(join(dirname(dirname(__CLI_DIR)), "package.json")
   ? dirname(dirname(__CLI_DIR))
   : dirname(__CLI_DIR);
 
-export const PONTIS_DIR = join(homedir(), ".pontis");
+export const PONTIS_DIR = getPontisDir();
 export const PROXY_LOG = join(PONTIS_DIR, "proxy.log");
 export const CACHE_FILE = join(PONTIS_DIR, "models_cache.json");
 export const DIST_PROXY = join(ROOT, "dist", "proxy.js");
 export const SRC_DIR = join(ROOT, "src");
-
-// Legacy file paths (for migration)
-export const LEGACY_KEY_FILE = join(homedir(), ".opencode_api_key");
-export const CLOUDFLARE_CONFIG_FILE = join(homedir(), ".cloudflare_gateway_config");
+export const CLOUDFLARE_CONFIG_FILE = join(PONTIS_DIR, "cloudflare.json");
 
 export const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
 export const PI_MODELS_FILE = join(PI_AGENT_DIR, "models.json");
@@ -41,8 +42,12 @@ export const FALLBACK_MODELS = [
   "mimo-v2.5-free",
   "deepseek-v4-flash-free",
   "big-pickle",
+  "nemotron-3.5-lightning-free",
   "nemotron-3-ultra-free",
-  "north-mini-code-free",
+  "hy3-free",
+  "laguna-s-2.1-free",
+  "qwen3.6-plus",
+  "kimi-k3",
 ];
 
 export const CLOUDFLARE_FALLBACK_MODELS = [
@@ -64,6 +69,7 @@ export const CLOUDFLARE_FALLBACK_MODELS = [
 export const CLOUDFLARE_CATEGORIES = {
   flagship: {
     name: "🚀 Flagship / Coding / Reasoning (Kimi 2.6, GLM 5.2, Qwen 2.5 Coder, DeepSeek R1 32B...)",
+    prompt: "Choose flagship/coding model",
     keywords: ["kimi-k2.6", "kimi-k2.7", "glm-5.2", "qwen2.5-coder", "deepseek-r1-distill-qwen-32b", "qwq-32b"],
     fallbacks: [
       "@cf/moonshotai/kimi-k2.6",
@@ -75,6 +81,7 @@ export const CLOUDFLARE_CATEGORIES = {
   },
   cheap: {
     name: "⚡ Fast / Cheap / Lightweight (Llama 3.2, Qwen 2.5 7B/14B, DeepSeek R1 8B, GLM Flash...)",
+    prompt: "Choose lightweight model",
     keywords: ["llama-3.2-1b", "llama-3.2-3b", "glm-4.7-flash", "llama-3.1-8b", "qwen2.5-7b", "qwen2.5-14b", "deepseek-r1-distill-llama-8b"],
     fallbacks: [
       "@cf/meta/llama-3.2-3b-instruct",
@@ -88,6 +95,7 @@ export const CLOUDFLARE_CATEGORIES = {
   },
   vision: {
     name: "👁️ Vision Models (Llama 3.2 Vision...)",
+    prompt: "Choose vision model",
     keywords: ["vision", "llava"],
     fallbacks: [
       "@cf/meta/llama-3.2-11b-vision-instruct",
@@ -102,6 +110,20 @@ export interface PontisEnv {
   apiKey?: string;
   upstreamUrl?: string;
   upstreamFormat?: string;
+}
+
+export const LOCAL_FALLBACK_MODELS = [
+  "llama3",
+  "qwen2.5-coder",
+  "mistral",
+  "deepseek-coder-v2",
+];
+
+/** Parse a string into a known provider, or null if unrecognized. */
+export function normalizeProvider(value?: string | null): ProviderType | null {
+  return value === "opencode" || value === "cloudflare" || value === "local"
+    ? value
+    : null;
 }
 
 export function getCloudflareConfigSaved(): { apiToken?: string; accountId?: string; gatewayId?: string } {
@@ -139,22 +161,129 @@ export function getLocalApiKey(): string {
   );
 }
 
-// Function to get OpenCode API key with migration support
+export function getDefaultModelForProvider(provider?: ProviderType | string | null): string {
+  switch (provider) {
+    case "cloudflare":
+      return CLOUDFLARE_FALLBACK_MODELS[0];
+    case "local":
+      return LOCAL_FALLBACK_MODELS[0];
+    case "opencode":
+    default:
+      return FALLBACK_MODELS[0];
+  }
+}
+
+export function getProviderDisplayName(provider?: ProviderType | string | null): string {
+  switch (provider) {
+    case "cloudflare":
+      return "Cloudflare AI Gateway";
+    case "local":
+      return "Local";
+    case "opencode":
+    default:
+      return "OpenCode";
+  }
+}
+
+export interface ResolvedConfig {
+  provider: ProviderType;
+  model: string;
+}
+
+export interface ResolveInput {
+  /** Explicit per-invocation values (CLI flags). */
+  provider?: string | null;
+  model?: string | null;
+  upstream?: string | null;
+  /** Environment overrides (PONTIS_PROVIDER / PONTIS_MODEL / PONTIS_UPSTREAM_URL). */
+  envProvider?: string | null;
+  envModel?: string | null;
+  envUpstream?: string | null;
+  /** Standing user preferences (~/.pontis/preferences.json). */
+  prefs: PontisPreferences;
+  /** Credential detection fallbacks. */
+  hasOpenCodeKey: boolean;
+  hasCloudflareConfig: boolean;
+}
+
+/**
+ * Check if a model string is compatible with a given provider.
+ * Prevents cross-provider model bleed (e.g. @cf/... sent to OpenCode).
+ */
+export function isModelCompatibleWithProvider(
+  model: string | undefined | null,
+  provider: ProviderType,
+): boolean {
+  if (!model) return false;
+  if (provider === "cloudflare") {
+    return model.startsWith("@cf/");
+  }
+  if (provider === "opencode") {
+    return !model.startsWith("@cf/") && !model.startsWith("http://") && !model.startsWith("https://");
+  }
+  if (provider === "local") {
+    return !model.startsWith("@cf/");
+  }
+  return true;
+}
+
+/**
+ * Resolve the active provider and model from explicit input, environment,
+ * preferences, and detected credentials — in that order of precedence.
+ * Pure function: no I/O, no env access, no guessing from model names.
+ */
+export function resolveProviderAndModel(input: ResolveInput): ResolvedConfig {
+  const { prefs } = input;
+  const lastUsed = prefs.lastUsed;
+
+  const provider: ProviderType =
+    normalizeProvider(input.provider) ??
+    normalizeProvider(input.envProvider) ??
+    (input.upstream || input.envUpstream ? "local" : null) ??
+    normalizeProvider(prefs.defaultProvider) ??
+    normalizeProvider(lastUsed?.provider) ??
+    (input.hasOpenCodeKey ? "opencode" : null) ??
+    (input.hasCloudflareConfig ? "cloudflare" : null) ??
+    (prefs.localEndpoint ? "local" : null) ??
+    "opencode";
+
+  const model =
+    input.model ||
+    input.envModel ||
+    (prefs.providerModels?.[provider] && isModelCompatibleWithProvider(prefs.providerModels[provider], provider)
+      ? prefs.providerModels[provider]
+      : undefined) ||
+    (prefs.defaultModel && isModelCompatibleWithProvider(prefs.defaultModel, provider)
+      ? prefs.defaultModel
+      : undefined) ||
+    (lastUsed?.provider === provider && lastUsed.model && isModelCompatibleWithProvider(lastUsed.model, provider)
+      ? lastUsed.model
+      : undefined) ||
+    getDefaultModelForProvider(provider);
+
+  return { provider, model };
+}
+
+export function resolveActiveProviderAndModel(options?: {
+  provider?: string;
+  model?: string;
+  upstream?: string;
+}): ResolvedConfig {
+  const savedCf = getCloudflareConfigSaved();
+  return resolveProviderAndModel({
+    provider: options?.provider,
+    model: options?.model,
+    upstream: options?.upstream,
+    envProvider: process.env.PONTIS_PROVIDER,
+    envModel: process.env.PONTIS_MODEL,
+    envUpstream: process.env.PONTIS_UPSTREAM_URL,
+    prefs: getPreferences(),
+    hasOpenCodeKey: !!getOpenCodeApiKey(),
+    hasCloudflareConfig: !!(savedCf.apiToken && savedCf.accountId),
+  });
+}
+
+// Function to get OpenCode API key
 export function getOpenCodeApiKey(): string | null {
-  // Try secure storage first
-  const secureKey = retrieveOpenCodeApiKey();
-  if (secureKey) {
-    return secureKey;
-  }
-  
-  // Try to migrate from legacy file
-  if (existsSync(LEGACY_KEY_FILE)) {
-    const migrated = migrateFromPlainText(LEGACY_KEY_FILE, CREDENTIAL_KEYS.OPENCODE_API_KEY);
-    if (migrated) {
-      return retrieveOpenCodeApiKey();
-    }
-  }
-  
-  // Fall back to environment variable
-  return process.env.OPENCODE_API_KEY || null;
+  return retrieveOpenCodeApiKey() || process.env.OPENCODE_API_KEY || null;
 }

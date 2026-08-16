@@ -3,8 +3,16 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ClientName } from "./install-engine";
 
-export const PONTIS_DIR = join(homedir(), ".pontis");
-export const PREFERENCES_FILE = join(PONTIS_DIR, "preferences.json");
+export function getPontisDir(): string {
+  return process.env.PONTIS_DIR || join(homedir(), ".pontis");
+}
+
+export function getPreferencesFile(): string {
+  return join(getPontisDir(), "preferences.json");
+}
+
+export const PONTIS_DIR = getPontisDir();
+export const PREFERENCES_FILE = getPreferencesFile();
 
 export type ProviderType = "opencode" | "local" | "cloudflare";
 
@@ -18,6 +26,7 @@ export interface LastUsedSession {
 export interface PontisPreferences {
   defaultProvider?: ProviderType;
   defaultModel?: string;
+  providerModels?: Partial<Record<ProviderType, string>>;
   defaultClient?: ClientName | "server";
   localEndpoint?: string;
   autoInstall?: boolean;
@@ -26,18 +35,20 @@ export interface PontisPreferences {
 
 /** Ensure ~/.pontis exists with restricted permissions */
 function ensurePontisDir(): void {
-  if (!existsSync(PONTIS_DIR)) {
-    mkdirSync(PONTIS_DIR, { recursive: true, mode: 0o700 });
+  const dir = getPontisDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 }
 
 /** Read preferences from ~/.pontis/preferences.json */
 export function getPreferences(): PontisPreferences {
-  if (!existsSync(PREFERENCES_FILE)) {
+  const file = getPreferencesFile();
+  if (!existsSync(file)) {
     return {};
   }
   try {
-    const raw = readFileSync(PREFERENCES_FILE, "utf-8");
+    const raw = readFileSync(file, "utf-8");
     return JSON.parse(raw) as PontisPreferences;
   } catch {
     return {};
@@ -49,7 +60,7 @@ export function savePreferences(prefs: Partial<PontisPreferences>): PontisPrefer
   ensurePontisDir();
   const current = getPreferences();
   const updated: PontisPreferences = { ...current, ...prefs };
-  writeFileSync(PREFERENCES_FILE, JSON.stringify(updated, null, 2), {
+  writeFileSync(getPreferencesFile(), JSON.stringify(updated, null, 2), {
     encoding: "utf-8",
     mode: 0o600,
   });
@@ -58,9 +69,10 @@ export function savePreferences(prefs: Partial<PontisPreferences>): PontisPrefer
 
 /** Reset all user preferences */
 export function resetPreferences(): void {
-  if (existsSync(PREFERENCES_FILE)) {
+  const file = getPreferencesFile();
+  if (existsSync(file)) {
     try {
-      unlinkSync(PREFERENCES_FILE);
+      unlinkSync(file);
     } catch {}
   }
 }
@@ -72,8 +84,11 @@ export function updateLastUsed(
   model: string,
 ): void {
   const current = getPreferences();
+  const providerModels = { ...(current.providerModels || {}), [provider]: model };
   savePreferences({
     ...current,
+    defaultModel: model,
+    providerModels,
     lastUsed: {
       client,
       provider,

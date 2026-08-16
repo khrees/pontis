@@ -190,11 +190,7 @@ function inputItemToMessages(inputItem: ResponseInputItem): OpenAIMessage[] {
     textParts.push(inputItem.content);
   } else if (contentParts.length > 0) {
     for (const part of contentParts as ResponseContentPart[]) {
-      if (
-        part.type === "input_text" ||
-        part.type === "text" ||
-        part.type === "output_text"
-      ) {
+      if (part.type === "input_text" || part.type === "text" || part.type === "output_text") {
         textParts.push(part.text || "");
       } else if (part.type === "tool_use") {
         toolUses.push({

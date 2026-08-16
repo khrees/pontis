@@ -1,14 +1,18 @@
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { select, input, createSpinner, badge, section, splash, t } from "./ui";
-import { CACHE_FILE, FALLBACK_MODELS, LEGACY_KEY_FILE, getOpenCodeApiKey } from "./config";
+import { CACHE_FILE, FALLBACK_MODELS, getOpenCodeApiKey } from "./config";
 import { storeOpenCodeApiKey } from "../secure-storage";
 import { savePreferences } from "./preferences";
+import { isFreeOpenCodeModel } from "../opencode-models";
+
+// Free-tier models that are listed upstream but known to be broken/offline.
+const EXCLUDED_FREE_MODELS = new Set(["minimax-m3-free"]);
 
 export async function getOpenCodeApiKeyInteractive(): Promise<string> {
   if (process.env.OPENCODE_API_KEY) return process.env.OPENCODE_API_KEY;
 
-  // Check secure storage (also handles legacy file migration)
+  // Check secure storage
   const secureKey = getOpenCodeApiKey();
   if (secureKey) return secureKey;
 
@@ -24,9 +28,6 @@ export async function getOpenCodeApiKeyInteractive(): Promise<string> {
 
   const cleanKey = key.trim();
   storeOpenCodeApiKey(cleanKey);
-  if (existsSync(LEGACY_KEY_FILE)) {
-    try { unlinkSync(LEGACY_KEY_FILE); } catch {}
-  }
   badge("success", "API key saved securely");
   return cleanKey;
 }
@@ -81,9 +82,7 @@ export async function fetchWorkingOpenCodeModels(apiKey: string): Promise<string
     const candidates = json.data
       .map((m: any) => m.id)
       .filter(
-        (id: string) =>
-          (id.endsWith("-free") && id !== "minimax-m3-free") ||
-          id === "big-pickle",
+        (id: string) => isFreeOpenCodeModel(id) && !EXCLUDED_FREE_MODELS.has(id),
       );
     const results = await Promise.all(
       candidates.map((m: string) => checkModelOnline(m, apiKey)),
@@ -153,8 +152,5 @@ export async function cmdUpdateKey(keyArg?: string) {
   }
   const cleanKey = apiKey.trim();
   storeOpenCodeApiKey(cleanKey);
-  if (existsSync(LEGACY_KEY_FILE)) {
-    try { unlinkSync(LEGACY_KEY_FILE); } catch {}
-  }
   badge("success", "OpenCode API key saved securely");
 }

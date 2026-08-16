@@ -11,7 +11,7 @@ import {
   listCredentialKeys
 } from '../src/secure-storage';
 
-const STORAGE_DIR = join(homedir(), '.pontis');
+const STORAGE_DIR = process.env.PONTIS_DIR || join(homedir(), '.pontis');
 const CREDENTIALS_FILE = join(STORAGE_DIR, 'credentials.enc');
 
 describe('Secure Storage', () => {
