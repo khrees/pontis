@@ -94,8 +94,9 @@ export async function handleModelsRequest(
       modelEntries.push(buildCodexModelEntry(defaultModel));
     }
 
-    if (route.path.startsWith("/v1/models/")) {
-      const modelId = route.path.split("/").pop()!;
+    const reqPath = url.pathname;
+    if (reqPath.startsWith("/v1/models/") || reqPath.startsWith("/models/") || route.path.startsWith("/v1/models/") || route.path.startsWith("/models/")) {
+      const modelId = decodeURIComponent((reqPath.startsWith("/v1/models/") || reqPath.startsWith("/models/") ? reqPath : route.path).split("/").pop()!);
       const matched = modelEntries.find((m) => m.slug === modelId);
       return jsonResponse(matched ?? buildCodexModelEntry(modelId));
     }

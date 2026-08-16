@@ -333,12 +333,14 @@ export function launchClient(
 
   switch (clientCmd) {
     case "codex":
-      // Follow Ollama's approach: --oss flag + OPENAI_BASE_URL + dummy API key.
-      // This tells Codex to use OpenAI-compatible HTTP API directly,
-      // no WebSocket, no api.openai.com traffic at all.
+      // Use dedicated Pontis profile: --profile pontis + proxy base URL
+      // This tells Codex to route through Pontis Responses API at http://localhost:8787/v1
       childEnv.OPENAI_BASE_URL = `${PROXY_URL}/v1`;
       childEnv.OPENAI_API_KEY = apiKey;
-      extraArgs = ["--oss", ...extraArgs];
+      childEnv.PONTIS_API_KEY = apiKey;
+      if (!extraArgs.includes("--profile") && !extraArgs.includes("-p")) {
+        extraArgs = ["--profile", CODEX_PROVIDER_ID, ...extraArgs];
+      }
       if (!extraArgs.includes("--model") && !extraArgs.includes("-m")) {
         extraArgs = extraArgs.concat("--model", model);
       }

@@ -200,6 +200,19 @@ codex --model mimo-v2.5-free
 
 ---
 
+## ⚠️ Model Switching & Native Subscriptions
+
+When you launch an agent through Pontis (e.g. `pontis claude` or `pontis codex`), Pontis configures the client session to route through your selected Pontis provider and model (OpenCode, Cloudflare Workers AI, or Local Ollama).
+
+> [!WARNING]
+> **Do not switch to native model names (`claude-3-7-sonnet`, `gpt-5.3-codex`) inside the client CLI's in-session `/model` switcher while connected via Pontis.**
+>
+> * **Why?** Third-party upstreams and local engines (like Ollama, OpenCode, or Cloudflare) do not host proprietary Anthropic or OpenAI models. If a client requests an unrecognized model name, Pontis will translate it to your active configured model or the upstream engine will return `404 Not Found`.
+> * **Want to use your official Claude Pro / OpenAI Plus subscription?** Simply launch `claude` or `codex` directly from your terminal without Pontis.
+> * **Want to switch models in Pontis?** Use `pontis config set model <model>` or choose a different model in the Pontis interactive launcher before starting your session.
+
+---
+
 ## Environment Configuration
 
 You can fully automate Pontis and bypass interactive prompt configuration by setting environment variables in your terminal:

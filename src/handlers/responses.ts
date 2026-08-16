@@ -4,6 +4,7 @@ import {
   assistantMessageFromOutputItems,
 } from "../assistant-message";
 import { getUpstream, resolveModel, selectUpstream } from "../config";
+import { getModel } from "../env";
 import { fetchWithTimeout, jsonResponse, openaiAuthHeaders, SSE_HEADERS, upstreamErrorResponse, wrapProxyRequest } from "../http";
 import { debugLog, warnLog } from "../logger";
 import { responseCache } from "../responses-cache";
@@ -89,6 +90,19 @@ export async function handleResponsesRequest(
     const baseUpstream = getUpstream(routeUpstream);
     if (baseUpstream.includes("opencode.ai")) {
       resolvedModel = resolveModel(resolvedModel);
+    } else {
+      const lower = resolvedModel.toLowerCase();
+      if (
+        lower.startsWith("gpt-") ||
+        lower.startsWith("o1") ||
+        lower.startsWith("o3") ||
+        lower.startsWith("claude-")
+      ) {
+        const configuredModel = getModel();
+        if (configuredModel) {
+          resolvedModel = configuredModel;
+        }
+      }
     }
     req.model = resolvedModel;
 

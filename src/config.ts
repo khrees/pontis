@@ -67,10 +67,14 @@ export type RouteConfig = {
 
 export function getDefaultFreeModel(): string {
   const model = getModel();
+  if (model) return model;
   if (getProvider() === "cloudflare") {
-    return model || "@cf/moonshotai/kimi-k2.6";
+    return "@cf/moonshotai/kimi-k2.6";
   }
-  return model || "mimo-v2.5-free";
+  if (getProvider() === "local") {
+    return "llama3";
+  }
+  return "mimo-v2.5-free";
 }
 
 export function resolveModel(model: string): string {
