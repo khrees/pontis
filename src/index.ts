@@ -402,6 +402,9 @@ app.use("*", async (c, next) => {
 app.get("/install", (c) =>
   c.redirect("https://raw.githubusercontent.com/khrees/pontis/main/install.sh", 302),
 );
+app.get("/install.sh", (c) =>
+  c.redirect("https://raw.githubusercontent.com/khrees/pontis/main/install.sh", 302),
+);
 app.all("*", (c) => handleRequest(c.req.raw));
 
 export default app;

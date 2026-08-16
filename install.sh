@@ -55,6 +55,10 @@ while [ $# -gt 0 ]; do
       MINIMAL="1"
       shift
       ;;
+    --nightly)
+      NIGHTLY="1"
+      shift
+      ;;
     --help|-h)
       echo "Pontis Installer 🌌"
       echo ""
@@ -68,10 +72,11 @@ while [ $# -gt 0 ]; do
       echo "  --with-pi          Install Pi coding agent"
       echo "  --without-<name>   Skip specific client"
       echo "  --minimal          Install Pontis only (no client tools)"
+      echo "  --nightly          Install the latest nightly pre-release"
       echo "  --help             Show this help"
       echo ""
       echo "Environment:"
-      echo "  PONTIS_VERSION     Install a specific version (default: latest)"
+      echo "  PONTIS_VERSION     Install a specific version (default: latest, or 'nightly')"
       exit 0
       ;;
     *)
@@ -146,8 +151,15 @@ fi
 # Create install dir
 mkdir -p "$INSTALL_DIR"
 
-# Get release tag name (allow override via PONTIS_VERSION env var)
-if [ -n "$PONTIS_VERSION" ]; then
+# Get release tag name (allow override via PONTIS_VERSION env var or --nightly flag)
+if [ "$NIGHTLY" = "1" ] || [ "$PONTIS_VERSION" = "nightly" ]; then
+  RELEASE_INFO=$(curl -s "https://api.github.com/repos/$REPO/releases" || echo "")
+  TAG_NAME=$(echo "$RELEASE_INFO" | grep -o '"tag_name": "[^"]*"' | grep -i 'nightly' | head -1 | cut -d'"' -f4 || echo "")
+  if [ -z "$TAG_NAME" ]; then
+    error "Failed to find a nightly release on GitHub ($REPO). Please check your internet connection."
+  fi
+  info "Using nightly release: $TAG_NAME"
+elif [ -n "$PONTIS_VERSION" ]; then
   TAG_NAME="$PONTIS_VERSION"
   info "Using specified version: $TAG_NAME"
 else

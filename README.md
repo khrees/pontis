@@ -32,19 +32,50 @@ Pontis performs real-time bidirectional protocol translation between **Anthropic
 
 ## Installation
 
-Install Pontis globally using the official installer:
+### Official Installer
+
+Install the latest **stable** release globally:
 
 ```bash
-curl -fsL https://pontis.khrees.com/install | bash
+curl -fsSL https://pontis.khrees.com/install | bash
 ```
 
-Or clone and build locally with Bun:
+#### Install Nightly / Pre-release Channel
+To try cutting-edge features and the latest upstream models before release:
 
 ```bash
-git clone https://github.com/khrees2412/pontis.git
+# Using installer flag
+curl -fsSL https://pontis.khrees.com/install | bash -s -- --nightly
+
+# Or via environment variable
+curl -fsSL https://pontis.khrees.com/install | PONTIS_VERSION=nightly bash
+```
+
+#### Install a Specific Version
+```bash
+curl -fsSL https://pontis.khrees.com/install | PONTIS_VERSION=v1.1.0 bash
+```
+
+#### Installer Options
+The installer can automatically install and configure client harnesses:
+* `--with-clients`: Install all coding agent CLIs (Claude Code, Codex, OpenCode, Pi).
+* `--with-claude`: Install Claude Code only.
+* `--with-codex`: Install Codex CLI only.
+* `--minimal`: Install Pontis only (no client tools).
+
+```bash
+curl -fsSL https://pontis.khrees.com/install | bash -s -- --with-clients
+```
+
+### Build from Source
+Clone and build locally with Node / Bun:
+
+```bash
+git clone https://github.com/khrees/pontis.git
 cd pontis
-bun install
-bun run build
+npm install
+npm run build
+npm link
 ```
 
 ---
