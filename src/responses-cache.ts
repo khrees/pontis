@@ -1,10 +1,3 @@
-/**
- * LRU conversation state cache for the Responses API.
- *
- * Codex may send `previous_response_id` on follow-up turns. This cache stores
- * translated chat messages so context can be reconstructed when needed.
- */
-
 import type { ResponsesApiUsage } from "./types";
 import { getCacheMaxTurns, getCacheTtlMs } from "./env";
 

@@ -1,18 +1,7 @@
-/**
- * WebSocket handler for the OpenAI Responses API protocol.
- *
- * When Codex's traffic is redirected from `wss://api.openai.com/v1/responses`
- * to the Pontis proxy, WebSocket connections arrive here. We translate each
- * JSON message to an internal HTTP POST /v1/responses call (reusing the
- * existing proxy handlers) and stream the SSE response back as WebSocket events.
- */
-
 import type { WebSocket } from "ws";
 import type { Hono } from "hono";
 import { debugLog, warnLog } from "../logger";
 
-// Simple in-memory store for ongoing responses so we can respond to
-// response.get / response.delete over the WebSocket.
 interface CachedResponse {
   id: string;
   model: string;
@@ -21,7 +10,29 @@ interface CachedResponse {
   usage: Record<string, number>;
 }
 
-const responseStore = new Map<string, CachedResponse>();
+interface StoredResponse extends CachedResponse {
+  storedAt: number;
+}
+
+// Keep the in-memory store bounded — unlike the HTTP path's ResponsesCache
+// (LRU + TTL), this previously grew without limit on a long-lived server.
+const MAX_STORED_RESPONSES = 200;
+const RESPONSE_TTL_MS = 5 * 60 * 1000; // 5 minutes, matches the HTTP cache default
+
+const responseStore = new Map<string, StoredResponse>();
+
+function pruneResponseStore(now: number = Date.now()): void {
+  // Drop expired entries.
+  for (const [id, r] of responseStore) {
+    if (now - r.storedAt > RESPONSE_TTL_MS) responseStore.delete(id);
+  }
+  // Map preserves insertion order — evict oldest beyond the cap.
+  while (responseStore.size > MAX_STORED_RESPONSES) {
+    const oldest = responseStore.keys().next().value;
+    if (oldest === undefined) break;
+    responseStore.delete(oldest);
+  }
+}
 
 /** SSE parser state for bridging HTTP SSE → WebSocket messages. */
 class SseParser {
@@ -136,12 +147,32 @@ async function proxyRequest(
       const decoder = new TextDecoder();
       const parser = new SseParser();
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          // Flush any remaining data
-          const tail = parser.flush();
-          for (const evt of tail) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            // Flush any remaining data
+            const tail = parser.flush();
+            for (const evt of tail) {
+              // Store completed responses for response.get
+              if (evt.type === "response.completed" && evt.response) {
+                const r = evt.response as Record<string, unknown>;
+                storeResponse({
+                  id: r.id as string,
+                  model: r.model as string,
+                  status: (r.status as string) || "completed",
+                  output: (r.output as unknown[]) || [],
+                  usage: (r.usage as Record<string, number>) || {},
+                });
+              }
+              ws.send(JSON.stringify(evt));
+            }
+            break;
+          }
+
+          const chunk = decoder.decode(value, { stream: true });
+          const events = parser.feed(chunk);
+          for (const evt of events) {
             // Store completed responses for response.get
             if (evt.type === "response.completed" && evt.response) {
               const r = evt.response as Record<string, unknown>;
@@ -155,25 +186,12 @@ async function proxyRequest(
             }
             ws.send(JSON.stringify(evt));
           }
-          break;
         }
-
-        const chunk = decoder.decode(value, { stream: true });
-        const events = parser.feed(chunk);
-        for (const evt of events) {
-          // Store completed responses for response.get
-          if (evt.type === "response.completed" && evt.response) {
-            const r = evt.response as Record<string, unknown>;
-            storeResponse({
-              id: r.id as string,
-              model: r.model as string,
-              status: (r.status as string) || "completed",
-              output: (r.output as unknown[]) || [],
-              usage: (r.usage as Record<string, number>) || {},
-            });
-          }
-          ws.send(JSON.stringify(evt));
-        }
+      } finally {
+        // Always release the upstream stream — a client disconnect that makes
+        // ws.send throw must not leave the response body locked/open.
+        try { reader.cancel().catch(() => {}); } catch {}
+        try { reader.releaseLock(); } catch {}
       }
     } else {
       // Non-streaming response
@@ -369,7 +387,10 @@ function awaitHandler(promise: Promise<void>, ws: WebSocket): void {
  * retrieved via response.get over WebSocket.
  */
 export function storeResponse(response: CachedResponse): void {
-  responseStore.set(response.id, response);
+  // Refresh recency on re-insert, store with a timestamp, then prune.
+  responseStore.delete(response.id);
+  responseStore.set(response.id, { ...response, storedAt: Date.now() });
+  pruneResponseStore();
 }
 
 /**

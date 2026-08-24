@@ -8,6 +8,7 @@
     "build": "bun run build:proxy && bun run build:cli",
     "build:proxy": "esbuild src/local-server.ts --bundle --platform=node --target=node18 --outfile=dist/proxy.js",
     "build:cli": "esbuild src/cli/index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/cli.mjs",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },

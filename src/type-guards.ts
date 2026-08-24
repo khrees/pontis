@@ -1,8 +1,3 @@
-/**
- * Type guard utilities for safer type checking and narrowing.
- * These functions help replace `any` types with proper type guards.
- */
-
 import type {
   AnthropicContentBlock,
   AnthropicTextBlock,
@@ -23,7 +18,6 @@ import type {
   ResponseInputItem,
 } from './types';
 
-// Anthropic content block type guards
 export function isAnthropicTextBlock(block: unknown): block is AnthropicTextBlock {
   return (
     typeof block === 'object' &&
@@ -82,7 +76,6 @@ export function isAnthropicContentBlock(block: unknown): block is AnthropicConte
   );
 }
 
-// OpenAI content part type guards
 export function isOpenAITextPart(part: unknown): part is OpenAIContentPartText {
   return (
     typeof part === 'object' &&
@@ -107,7 +100,6 @@ export function isOpenAIContentPart(part: unknown): part is OpenAIContentPart {
   return isOpenAITextPart(part) || isOpenAIImagePart(part);
 }
 
-// OpenAI message type guards
 export function isOpenAIMessage(message: unknown): message is OpenAIMessage {
   if (typeof message !== 'object' || message === null) return false;
   const msg = message as OpenAIMessage;
@@ -128,7 +120,6 @@ export function isOpenAIToolCall(toolCall: unknown): toolCall is OpenAIToolCall 
   );
 }
 
-// Responses API type guards
 export function isResponsesApiTool(tool: unknown): tool is ResponsesApiTool {
   return (
     typeof tool === 'object' &&
@@ -174,7 +165,6 @@ export function isResponseInputItem(item: unknown): item is ResponseInputItem {
   return typeof item === 'object' && item !== null;
 }
 
-// Generic utility type guards
 export function isString(value: unknown): value is string {
   return typeof value === 'string';
 }
@@ -207,7 +197,6 @@ export function isFunction(value: unknown): value is (...args: unknown[]) => unk
   return typeof value === 'function';
 }
 
-// Safe property access with type guards
 export function getProperty<T extends object, K extends keyof T>(
   obj: T | null | undefined,
   key: K,
@@ -224,7 +213,6 @@ export function hasProperty<T extends object>(
   return isObject(obj) && key in obj;
 }
 
-// Safe array operations
 export function getArrayItem<T>(
   array: T[] | null | undefined,
   index: number,
@@ -241,7 +229,6 @@ export function getFirstItem<T>(
   return getArrayItem(array, 0, defaultValue);
 }
 
-// Safe JSON parsing with type guards
 export function safeParseJson<T>(json: string, validator?: (value: unknown) => value is T, fallback?: T): T | null {
   try {
     const parsed = JSON.parse(json);
@@ -252,8 +239,7 @@ export function safeParseJson<T>(json: string, validator?: (value: unknown) => v
   }
 }
 
-// Safe number conversion
-export function safeToNumber(value: unknown, defaultValue: number = 0): number {
+export function safeToNumber(value: unknown, defaultValue = 0): number {
   if (typeof value === "number") {
     return isFinite(value) ? value : defaultValue;
   }
@@ -265,8 +251,7 @@ export function safeToNumber(value: unknown, defaultValue: number = 0): number {
   return defaultValue;
 }
 
-// Safe string conversion
-export function safeToString(value: unknown, defaultValue: string = ''): string {
+export function safeToString(value: unknown, defaultValue = ''): string {
   if (isString(value)) return value;
   if (value === null || value === undefined) return defaultValue;
   return String(value);

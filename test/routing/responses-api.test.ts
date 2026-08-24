@@ -55,7 +55,7 @@ describe('POST /v1/responses — Responses API (Codex CLI)', () => {
     vi.restoreAllMocks();
   });
 
-  it('remaps paid OpenCode models to free counterparts under OpenCode upstream', async () => {
+  it('preserves paid OpenCode model IDs unchanged — does not remap deepseek-v4-flash or mimo-v2.5 to free variants', async () => {
     let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (_url, init?: RequestInit) => {
@@ -67,7 +67,7 @@ describe('POST /v1/responses — Responses API (Codex CLI)', () => {
       },
     );
 
-    // Test deepseek paid to free
+    // Test deepseek paid — must be preserved as-is, not remapped to -free
     const request1 = new Request('https://proxy.example/zen/v1/responses', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key },
@@ -79,12 +79,13 @@ describe('POST /v1/responses — Responses API (Codex CLI)', () => {
 
     const response1 = await worker.fetch(request1);
     expect(response1.status).toBe(200);
-    expect(capturedBody!.model).toBe('deepseek-v4-flash-free');
+    // Model ID must NOT be downgraded to deepseek-v4-flash-free
+    expect(capturedBody!.model).toBe('deepseek-v4-flash');
 
     const resJson1 = await parseResponsesJson(response1);
     expect(resJson1.model).toBe('deepseek-v4-flash');
 
-    // Test mimo paid to free
+    // Test mimo paid — must be preserved as-is
     const request2 = new Request('https://proxy.example/zen/v1/responses', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key },
@@ -96,7 +97,8 @@ describe('POST /v1/responses — Responses API (Codex CLI)', () => {
 
     const response2 = await worker.fetch(request2);
     expect(response2.status).toBe(200);
-    expect(capturedBody!.model).toBe('mimo-v2.5-free');
+    // Model ID must NOT be downgraded to mimo-v2.5-free
+    expect(capturedBody!.model).toBe('mimo-v2.5');
 
     const resJson2 = await parseResponsesJson(response2);
     expect(resJson2.model).toBe('mimo-v2.5');

@@ -12,6 +12,7 @@ import {
   PROXY_LOG,
   getCloudflareConfigSaved,
   getOpenCodeApiKey,
+  getGoogleAuthToken,
   normalizeProvider,
   resolveActiveProviderAndModel,
   getDefaultModelForProvider,
@@ -31,8 +32,10 @@ import {
   createSpinner,
 } from "./ui";
 import { fetchWorkingOpenCodeModels } from "./provider-opencode";
+import { isFreeOpenCodeModel } from "../opencode-models";
 import { fetchLocalModels } from "./provider-local";
 import { fetchCloudflareModels } from "./provider-cloudflare";
+import { fetchGoogleModels } from "./provider-google";
 import { PORT, PROXY_URL } from "./proxy-manager";
 import {
   ALL_CLIENTS,
@@ -40,6 +43,8 @@ import {
   isInstalled,
   checkAll,
   installClient,
+  normalizeClientName,
+  closestClientName,
   type ClientName,
   cmdClientsList,
   cmdClientsDefault,
@@ -66,14 +71,14 @@ program
   .name("pontis")
   .version(VERSION)
   .description(
-    "Universal AI gateway & runtime launcher bridging Claude Code, Codex CLI, OpenCode, Pi, Cloudflare Workers AI, and local LLMs",
+    "Universal AI gateway & runtime launcher bridging Claude Code, Codex CLI, OpenCode, Pi, Hermes Agent, Google Gemini, Cloudflare Workers AI, and local LLMs",
   )
   .option("--json", "Output in JSON format (for scripting)");
 
 function addPontisOptions(cmd: Command) {
   return cmd
-    .option("-m, --model <name>", "Model ID (e.g. mimo-v2.5-free)")
-    .option("-p, --provider <type>", "Provider: opencode | local | cloudflare")
+    .option("-m, --model <name>", "Model ID (e.g. gemini-2.5-flash, mimo-v2.5-free)")
+    .option("-p, --provider <type>", "Provider: google | opencode | local | cloudflare")
     .option("-k, --api-key <key>", "API key for the provider")
     .option("-u, --upstream <url>", "Upstream endpoint URL")
     .option(
@@ -89,10 +94,6 @@ function addPontisOptions(cmd: Command) {
       "Skip auto-install, error if client tool is missing",
     );
 }
-
-// ──────────────────────────────────────────────
-//  Client Subcommands (Direct Launchers)
-// ──────────────────────────────────────────────
 
 // Subcommand: claude
 addPontisOptions(
@@ -117,6 +118,20 @@ addPontisOptions(
     .allowExcessArguments(true),
 ).action((opts) => {
   runWithConfig("codex", opts, extractChildArgs("codex")).catch((e) => {
+    console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
+    process.exit(1);
+  });
+});
+
+// Subcommand: hermes
+addPontisOptions(
+  program
+    .command("hermes")
+    .description("Start proxy and launch Hermes Agent with configured model")
+    .allowUnknownOption(true)
+    .allowExcessArguments(true),
+).action((opts) => {
+  runWithConfig("hermes", opts, extractChildArgs("hermes")).catch((e) => {
     console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
     process.exit(1);
   });
@@ -185,7 +200,7 @@ authCmd
 authCmd
   .command("set [provider] [key]")
   .alias("add")
-  .description("Add or update API key for a provider (opencode, cloudflare, local)")
+  .description("Add or update API key for a provider (google, opencode, cloudflare, local)")
   .action(async (provider, key) => {
     await cmdAuthSet(provider, key);
   });
@@ -193,7 +208,7 @@ authCmd
 authCmd
   .command("remove [provider]")
   .alias("delete")
-  .description("Remove credentials for a provider (opencode, cloudflare, local, all)")
+  .description("Remove credentials for a provider (google, opencode, cloudflare, local, all)")
   .action(async (provider) => {
     await cmdAuthRemove(provider);
   });
@@ -234,10 +249,6 @@ program
     await cmdAuthRemove("cloudflare");
   });
 
-// ──────────────────────────────────────────────
-//  Clients Management & Listing
-// ──────────────────────────────────────────────
-
 const clientsCmd = program
   .command("clients")
   .description("List and manage coding agent CLIs (Claude, Codex, OpenCode, Pi)")
@@ -267,14 +278,24 @@ clientsCmd
     if (clients.length === 0) {
       await cmdClientsInteractive();
     } else {
-      const names = clients.includes("all") ? ALL_CLIENTS : (clients as ClientName[]);
+      const names: ClientName[] = clients.includes("all")
+        ? ALL_CLIENTS
+        : (clients.map((c: string) => normalizeClientName(c) || (c as ClientName)));
+      let hasUnknown = false;
       for (const name of names) {
+        if (!CLIENTS[name]) {
+          const suggestion = closestClientName(name);
+          badge("error", `Unknown client: ${name}${suggestion ? ` — did you mean "${suggestion}"?` : ""}`);
+          hasUnknown = true;
+          continue;
+        }
         if (isInstalled(name)) {
           badge("muted", `${CLIENTS[name]?.name || name} is already installed`);
           continue;
         }
         await installClient(name, { interactive: false });
       }
+      if (hasUnknown) process.exit(1);
     }
   });
 
@@ -291,7 +312,7 @@ program
 program
   .command("install")
   .description("Install or check coding agent CLI tools")
-  .argument("[clients...]", "Client(s) to install (claude, codex, opencode, pi, or 'all')")
+  .argument("[clients...]", "Client(s) to install (claude, codex, hermes, opencode, pi, or 'all')")
   .option("--list", "Show installed clients and versions")
   .option("--check", "Exit 0 if all specified clients are installed, 1 if missing")
   .option("--json", "Output in JSON format")
@@ -303,8 +324,8 @@ program
       }
 
       if (opts.check) {
-        const names = clients.length > 0
-          ? (clients.includes("all") ? ALL_CLIENTS : clients as ClientName[])
+        const names: ClientName[] = clients.length > 0
+          ? (clients.includes("all") ? ALL_CLIENTS : clients.map((c) => normalizeClientName(c) || (c as ClientName)))
           : ALL_CLIENTS;
         const status = checkAll();
         const missing = names.filter((n) => !status[n as ClientName]);
@@ -324,18 +345,26 @@ program
         return;
       }
 
-      const names = clients.length > 0
-        ? (clients.includes("all") ? ALL_CLIENTS : clients as ClientName[])
+      const names: ClientName[] | null = clients.length > 0
+        ? (clients.includes("all") ? ALL_CLIENTS : clients.map((c) => normalizeClientName(c) || (c as ClientName)))
         : null;
 
       if (names) {
+        let hasUnknown = false;
         for (const name of names) {
+          if (!CLIENTS[name]) {
+            const suggestion = closestClientName(name);
+            badge("error", `Unknown client: ${name}${suggestion ? ` — did you mean "${suggestion}"?` : ""}`);
+            hasUnknown = true;
+            continue;
+          }
           if (isInstalled(name)) {
             badge("muted", `${CLIENTS[name]?.name || name} already installed — skipping`);
             continue;
           }
           await installClient(name, { interactive: false });
         }
+        if (hasUnknown) process.exit(1);
         if (opts.json || jsonMode) {
           const status = checkAll();
           outputJson({ clients: names.map((n) => ({ name: n, installed: status[n] })) });
@@ -350,10 +379,6 @@ program
     }
   });
 
-// ──────────────────────────────────────────────
-//  User Preferences & Configuration
-// ──────────────────────────────────────────────
-
 const configCmd = program
   .command("config")
   .description("View and manage Pontis preferences (default client, provider, model)")
@@ -364,10 +389,8 @@ const configCmd = program
     kv("Default Provider", t.primary(prefs.defaultProvider || "opencode"));
     kv("Default Model", t.primary(prefs.defaultModel || "(provider default)"));
     if (prefs.localEndpoint) kv("Local Endpoint", t.muted(prefs.localEndpoint));
-    console.log();
     badge("muted", "Set value: pontis config set <key> <value>");
     badge("muted", "Keys: client | provider | model | endpoint");
-    console.log();
   });
 
 configCmd
@@ -376,14 +399,24 @@ configCmd
   .action((key, value) => {
     const normKey = key.toLowerCase().trim();
     switch (normKey) {
-      case "client":
-        savePreferences({ defaultClient: value.toLowerCase() as ClientName | "server" });
-        badge("success", `Default client set to "${value}"`);
+      case "client": {
+        const lowerVal = value.toLowerCase().trim();
+        const clientVal = lowerVal === "server" ? "server" : normalizeClientName(value);
+        if (!clientVal) {
+          badge(
+            "error",
+            `Unknown client "${value}". Valid clients: claude, codex, hermes, opencode, pi, server`,
+          );
+          process.exit(1);
+        }
+        savePreferences({ defaultClient: clientVal as ClientName | "server" });
+        badge("success", `Default client set to "${clientVal}"`);
         break;
+      }
       case "provider": {
         const provider = normalizeProvider(value.toLowerCase());
         if (!provider) {
-          badge("error", `Unknown provider "${value}". Valid providers: opencode, cloudflare, local`);
+          badge("error", `Unknown provider "${value}". Valid providers: google, opencode, local, cloudflare`);
           process.exit(1);
         }
         const prefs = getPreferences();
@@ -422,14 +455,10 @@ configCmd
     badge("success", "Preferences reset to defaults");
   });
 
-// ──────────────────────────────────────────────
-//  Models Discovery
-// ──────────────────────────────────────────────
-
 program
   .command("models")
   .description("List available models from the configured provider")
-  .option("-p, --provider <type>", "Provider: opencode | local | cloudflare")
+  .option("-p, --provider <type>", "Provider: google | opencode | local | cloudflare")
   .option("-u, --upstream <url>", "Upstream endpoint URL")
   .action(async (opts) => {
     try {
@@ -442,6 +471,37 @@ program
       let upstreamUrl = opts.upstream || process.env.PONTIS_UPSTREAM_URL || (provider === "local" ? prefs.localEndpoint : undefined);
 
       switch (provider) {
+        case "google": {
+          const apiKey = opts.apiKey || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || getGoogleAuthToken() || "";
+          if (!apiKey) {
+            const msg = "No Google credentials found. Run: pontis auth set google";
+            if (jsonMode) outputJsonError("missing_api_key", msg);
+            badge("error", msg);
+            process.exit(1);
+          }
+          const spin = jsonMode ? null : createSpinner("Fetching models from Google AI...");
+          const models = await fetchGoogleModels(apiKey);
+          if (spin) {
+            spin.stop(
+              models.length > 0
+                ? { type: "success", text: `Found ${models.length} model${models.length === 1 ? "" : "s"}` }
+                : { type: "warning", text: "No models returned from Google" },
+            );
+          }
+          if (jsonMode) {
+            outputJson({
+              provider: "google",
+              models: models.map((id) => ({ id })),
+            });
+          }
+          if (models.length === 0) {
+            badge("warning", "No models found. Check your API key.");
+          } else {
+            section("Available Google (Gemini) Models");
+            for (const m of models) kv("Model", t.primary(m));
+          }
+          break;
+        }
         case "cloudflare": {
           const savedCf = getCloudflareConfigSaved();
           const apiToken =
@@ -516,14 +576,17 @@ program
           if (jsonMode) {
             outputJson({
               provider: "opencode",
-              models: models.map((id) => ({ id })),
+              models: models.map((id) => ({ id, free: isFreeOpenCodeModel(id) })),
             });
           }
           if (models.length === 0) {
             badge("warning", "No models found. Check your API key.");
           } else {
             section("Available OpenCode Models");
-            for (const m of models) kv("Model", t.primary(m));
+            for (const m of models) {
+              const tag = isFreeOpenCodeModel(m) ? t.secondary(" [Free]") : t.muted(" [Paid/Go]");
+              kv("Model", `${t.primary(m)}${tag}`);
+            }
           }
           break;
         }
@@ -569,10 +632,6 @@ program
     }
   });
 
-// ──────────────────────────────────────────────
-//  Status Subcommand
-// ──────────────────────────────────────────────
-
 program
   .command("status")
   .description("Show current proxy, configuration, authentication, and client status")
@@ -593,6 +652,9 @@ program
       let upstream = process.env.PONTIS_UPSTREAM_URL;
       if (!upstream) {
         switch (provider) {
+          case "google":
+            upstream = "(Google Gemini API)";
+            break;
           case "local":
             upstream = prefs.localEndpoint || "http://localhost:11434/v1";
             break;
@@ -609,7 +671,9 @@ program
       const keyExists =
         provider === "cloudflare"
           ? existsSync(CLOUDFLARE_CONFIG_FILE)
-          : getOpenCodeApiKey() !== null;
+          : provider === "google"
+            ? getGoogleAuthToken() !== null
+            : getOpenCodeApiKey() !== null;
 
       const clients = getAllClientsInfo();
 
@@ -646,7 +710,6 @@ program
         );
       }
 
-      console.log();
       section("Active Configuration");
       kv("Default Client", t.primary(prefs.defaultClient || "claude"));
       kv("Provider", t.primary(provider));
@@ -660,14 +723,12 @@ program
       const hostsActive = isHostsEntryActive();
       const pfActive = isPfRuleActive();
       if (hostsActive || pfActive) {
-        console.log();
         section("Codex Network Redirect");
         kv("Hosts entry", hostsActive ? t.warning("active") : t.muted("inactive"));
         kv("pf rule", pfActive ? t.warning("active") : t.muted("inactive"));
         badge("info", "Stale redirect rules may break codex login");
         badge("muted", "Clean up: sudo pontis cleanup-redirect");
       }
-      console.log();
 
       section("Supported Coding Agent CLIs");
       for (const c of clients) {
@@ -681,10 +742,8 @@ program
           kv(`${c.displayName}${isDef}`, t.muted("not installed"));
         }
       }
-      console.log();
       badge("muted", "Manage clients: pontis clients");
       badge("muted", "Manage keys:    pontis auth");
-      console.log();
     } catch (e: any) {
       if (jsonMode) outputJsonError("status_failed", e.message || String(e));
       console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
@@ -734,7 +793,7 @@ program.action(() => {
   if (opts.provider || process.env.PONTIS_PROVIDER)
     env.provider =
       opts.provider ||
-      (process.env.PONTIS_PROVIDER as "opencode" | "local" | "cloudflare");
+      (process.env.PONTIS_PROVIDER as "opencode" | "local" | "cloudflare" | "google");
   if (opts.apiKey) env.apiKey = opts.apiKey;
 
   runInteractiveWizard(env).catch((e) => {
@@ -759,9 +818,16 @@ const KNOWN_PONTIS_FLAGS = new Set([
   "--no-install",
 ]);
 
-function extractChildArgs(subcommand: string): string[] {
+function extractChildArgs(...commands: string[]): string[] {
   const args = process.argv.slice(2);
-  const subIdx = args.indexOf(subcommand);
+  let subIdx = -1;
+  for (const cmd of commands) {
+    const idx = args.indexOf(cmd);
+    if (idx >= 0) {
+      subIdx = idx;
+      break;
+    }
+  }
   if (subIdx < 0) return [];
   const result: string[] = [];
   for (let i = subIdx + 1; i < args.length; i++) {
@@ -779,6 +845,17 @@ function extractChildArgs(subcommand: string): string[] {
     result.push(arg);
   }
   return result;
+}
+
+// Platform gate: Pontis shells out to Unix-only tools (`which`, `lsof`,
+// `:`-style PATH joins). Fail fast on Windows with a clear message instead of a
+// confusing "'which' is not recognized" deep inside a flow.
+if (process.platform === "win32") {
+  badge("error", "Pontis is not supported on Windows yet.");
+  console.log(
+    `  ${t.muted("Pontis relies on Unix-only tooling (lsof, which, sh). Run it inside WSL: https://aka.ms/wsl")}`,
+  );
+  process.exit(1);
 }
 
 program.parse(process.argv);

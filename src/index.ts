@@ -40,6 +40,7 @@ import {
   streamAnthropicToOpenAICompletion,
   streamOpenAICompletionToAnthropic,
 } from "./translate/completions";
+import { getDocsHtml } from "./docs";
 import type {
   AnthropicRequest,
   AnthropicResponse,
@@ -49,11 +50,6 @@ import type {
   OpenAIResponse,
 } from "./types";
 
-// ──────────────────────────────────────────────
-//  Per-endpoint handlers
-// ──────────────────────────────────────────────
-
-/** POST /v1/messages — Anthropic → OpenAI / completions / passthrough */
 async function handleV1Messages(
   reqId: string,
   request: Request,
@@ -319,10 +315,6 @@ async function handleModelsOrInfo(
   );
 }
 
-// ──────────────────────────────────────────────
-//  Main request dispatch
-// ──────────────────────────────────────────────
-
 async function handleRequest(request: Request): Promise<Response> {
   const reqId = generateRequestId();
   const route = routeConfig(request);
@@ -330,32 +322,26 @@ async function handleRequest(request: Request): Promise<Response> {
   const reqUrlPath = new URL(request.url).pathname;
   const key = extractApiKey(request.headers);
 
-  // ── Anthropic messages ──
   if (route.path === "/v1/messages" && request.method === "POST") {
     return handleV1Messages(reqId, request, route, fmt, key);
   }
 
-  // ── OpenAI chat completions ──
   if (matchesApiPath(route.path, reqUrlPath, "/chat/completions") && request.method === "POST") {
     return handleChatCompletions(reqId, request, route, fmt, key);
   }
 
-  // ── OpenAI legacy completions ──
   if (route.path === "/v1/completions" && request.method === "POST") {
     return handleV1Completions(reqId, request, route, fmt, key);
   }
 
-  // ── OpenAI Responses API (Codex CLI) ──
   if (matchesApiPath(route.path, reqUrlPath, "/responses") && request.method === "POST") {
     return handleResponsesRequest(request, route.upstream, reqId);
   }
 
-  // ── GET: models or info ──
   if (request.method === "GET") {
     return handleModelsOrInfo(reqId, request, route);
   }
 
-  // ── Unrecognised ──
   return jsonResponse(
     {
       name: "pontis-proxy",
@@ -367,20 +353,21 @@ async function handleRequest(request: Request): Promise<Response> {
         "/v1/completions": "OpenAI Completions → upstream (translated when needed)",
         "/v1/responses": "OpenAI Responses → chat completions (Codex CLI)",
         "/v1/models": "Model discovery proxy",
+        "/docs": "Interactive documentation & web UI",
       },
     },
     route.path === "/" ? 200 : 404,
   );
 }
 
-// ──────────────────────────────────────────────
-//  Hono app
-// ──────────────────────────────────────────────
-
 const app = new Hono();
 app.use("*", logger());
 
 // Security headers + CORS (H3, L1)
+// CORS is intentionally limited to localhost origins: the proxy is consumed by
+// CLI agents (not browsers), and the server binds to loopback by default, so a
+// remote site cannot reach it. A page on another localhost port is inside the
+// same trust boundary as any local process.
 app.use("*", async (c, next) => {
   const origin = c.req.header("Origin");
   if (origin) {
@@ -398,6 +385,9 @@ app.use("*", async (c, next) => {
   c.header("X-Content-Type-Options", "nosniff");
   c.header("X-Frame-Options", "DENY");
 });
+
+app.get("/docs", (c) => c.html(getDocsHtml()));
+app.get("/docs/", (c) => c.html(getDocsHtml()));
 
 app.get("/install", (c) =>
   c.redirect("https://raw.githubusercontent.com/khrees/pontis/main/install.sh", 302),

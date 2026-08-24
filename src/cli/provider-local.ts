@@ -109,7 +109,10 @@ export async function setupLocalInteractive(): Promise<{
     model = await input("Model name (e.g. llama3, qwen2.5-coder)", "llama3");
     if (!model) model = "llama3";
   } else {
-    const result = await select("Pick a model", models, { defaultIndex: 0 });
+    const result = await select("Pick a model", models, {
+      defaultIndex: 0,
+      customLabel: "Custom model ID (enter manually)",
+    });
     if (result.index === -1) {
       model = await input("Enter model ID", models[0]);
       if (!model) model = models[0];

@@ -1,10 +1,10 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { select, input, createSpinner, badge, section, splash, t } from "./ui";
+import { select, input, inputRequired, createSpinner, badge, section, splash, t } from "./ui";
 import { CACHE_FILE, getOpenCodeApiKey } from "./config";
 import { storeOpenCodeApiKey } from "../secure-storage";
-import { savePreferences } from "./preferences";
-import { isFreeOpenCodeModel } from "../opencode-models";
+import { getPreferences, savePreferences } from "./preferences";
+import { isFreeOpenCodeModel, registerFreeOpenCodeModels } from "../opencode-models";
 
 // Free-tier models that are listed upstream but known to be broken/offline.
 const EXCLUDED_FREE_MODELS = new Set(["minimax-m3-free"]);
@@ -16,9 +16,8 @@ export async function getOpenCodeApiKeyInteractive(): Promise<string> {
   const secureKey = getOpenCodeApiKey();
   if (secureKey) return secureKey;
 
-  section("OpenCode API Key Setup");
   console.log(
-    `  Get your free API key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys\n`,
+    `  Get your free API key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys`,
   );
   const key = await input("Paste your OpenCode API key", undefined, true);
   if (!key || !key.trim()) {
@@ -35,9 +34,10 @@ export async function getOpenCodeApiKeyInteractive(): Promise<string> {
 export async function checkModelOnline(
   model: string,
   apiKey: string,
+  baseUrl = "https://opencode.ai/zen/v1",
 ): Promise<boolean> {
   try {
-    const res = await fetch("https://opencode.ai/zen/v1/chat/completions", {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -58,48 +58,94 @@ export async function checkModelOnline(
   return false;
 }
 
-export async function fetchWorkingOpenCodeModels(apiKey: string): Promise<string[]> {
-  if (existsSync(CACHE_FILE)) {
+export async function fetchWorkingOpenCodeModels(
+  apiKey: string,
+  forceRefresh = false,
+): Promise<string[]> {
+  if (!forceRefresh && existsSync(CACHE_FILE)) {
     try {
       const cache = JSON.parse(readFileSync(CACHE_FILE, "utf-8"));
       if (
         Array.isArray(cache.models) &&
         typeof cache.timestamp === "number" &&
-        Date.now() - cache.timestamp < 86400000
+        Date.now() - cache.timestamp < 300000
       ) {
+        if (Array.isArray(cache.freeModels)) {
+          registerFreeOpenCodeModels(cache.freeModels);
+        } else {
+          registerFreeOpenCodeModels(cache.models.filter((m: string) => isFreeOpenCodeModel(m)));
+        }
         return cache.models;
       }
     } catch {}
   }
-  try {
-    const res = await fetch("https://opencode.ai/zen/v1/models", {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) return [];
-    const json: any = await res.json();
-    if (!json || !Array.isArray(json.data)) return [];
-    const candidates = json.data
-      .map((m: any) => m.id)
-      .filter(
-        (id: string) => isFreeOpenCodeModel(id) && !EXCLUDED_FREE_MODELS.has(id),
-      );
-    const results = await Promise.all(
-      candidates.map((m: string) => checkModelOnline(m, apiKey)),
-    );
-    const working = results.filter(Boolean).map((_, i) => candidates[i]);
-    if (working.length > 0) {
+
+  // 1. Fetch models from Zen endpoint
+  const fetchZen = async (): Promise<string[]> => {
+    try {
+      const res = await fetch("https://opencode.ai/zen/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) return [];
+      const json: any = await res.json();
+      if (!json || !Array.isArray(json.data)) return [];
+
+      return json.data
+        .map((m: any) => (typeof m === "string" ? m : m?.id))
+        .filter((id: any) => id && typeof id === "string" && !EXCLUDED_FREE_MODELS.has(id));
+    } catch {
+      return [];
+    }
+  };
+
+  // 2. Fetch paid models from Go endpoint
+  const fetchGo = async (): Promise<string[]> => {
+    try {
+      const res = await fetch("https://opencode.ai/zen/go/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) return [];
+      const json: any = await res.json();
+      if (!json || !Array.isArray(json.data)) return [];
+
+      return json.data
+        .map((m: any) => (typeof m === "string" ? m : m?.id))
+        .filter((id: any) => id && typeof id === "string" && !EXCLUDED_FREE_MODELS.has(id));
+    } catch {
+      return [];
+    }
+  };
+
+  const [zenList, goList] = await Promise.all([fetchZen(), fetchGo()]);
+
+  // Identify free models vs paid models
+  const freeList = zenList.filter((m) => isFreeOpenCodeModel(m));
+  if (freeList.length > 0) {
+    registerFreeOpenCodeModels(freeList);
+  }
+
+  // Combined unique list: free models first, then paid Go models
+  const combined = Array.from(new Set([...freeList, ...goList, ...zenList]));
+
+  if (combined.length > 0) {
+    try {
       mkdirSync(dirname(CACHE_FILE), { recursive: true });
       writeFileSync(
         CACHE_FILE,
-        JSON.stringify({ timestamp: Date.now(), models: working }),
+        JSON.stringify({
+          timestamp: Date.now(),
+          models: combined,
+          freeModels: freeList,
+          paidModels: goList.filter((m) => !freeList.includes(m)),
+        }),
         { encoding: "utf-8", mode: 0o600 },
       );
-    }
-    return working;
-  } catch {
-    return [];
+    } catch {}
   }
+
+  return combined;
 }
 
 export async function setupOpenCodeInteractive(): Promise<{
@@ -124,11 +170,16 @@ export async function setupOpenCodeInteractive(): Promise<{
     model = await input("Enter model ID (e.g. mimo-v2.5-free, qwen3.6-plus)", "mimo-v2.5-free");
     if (!model) model = "mimo-v2.5-free";
   } else {
-    const choices = [...models, "✏️ Enter Custom Model ID"];
-    const result = await select("Pick a model", choices, { defaultIndex: 0 });
-    if (result.index === -1 || result.index === choices.length - 1) {
-      model = await input("Enter model ID", models[0]);
-      if (!model) model = models[0];
+    const prefs = getPreferences();
+    const activeModel = prefs.providerModels?.opencode || prefs.defaultModel;
+    const defaultIdx = activeModel && models.indexOf(activeModel) >= 0 ? models.indexOf(activeModel) : 0;
+    const result = await select("Pick a model", models, {
+      defaultIndex: defaultIdx,
+      customLabel: "Custom model ID (enter manually)",
+    });
+    if (result.index === -1) {
+      // Custom entry: don't silently fall back to the list item they declined.
+      model = await inputRequired("Enter model ID");
     } else {
       model = result.value;
     }
@@ -145,7 +196,7 @@ export async function cmdUpdateKey(keyArg?: string) {
   let apiKey = keyArg;
   if (!apiKey) {
     console.log(
-      `  Get your key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys\n`,
+      `  Get your key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys`,
     );
     apiKey = await input("Paste your OpenCode API key", undefined, true);
   }

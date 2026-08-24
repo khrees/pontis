@@ -22,17 +22,10 @@ const PASSTHROUGH_ERROR_HEADERS = [
 
 let requestCounter = 0;
 
-/** Generate a short, human-readable request ID for tracing. */
 export function generateRequestId(): string {
   return `req_${Date.now().toString(36)}_${(++requestCounter % 65536).toString(36)}`;
 }
 
-/**
- * Fetch with a configurable timeout.
- *
- * Defaults to 120s. Override via `PONTIS_TIMEOUT_MS` env var or the `timeout` option.
- * Composes with any caller-provided AbortSignal.
- */
 export async function fetchWithTimeout(
   url: string,
   options: RequestInit & { timeout?: number } = {},
@@ -91,7 +84,6 @@ export function openaiAuthHeaders(key: string | null): Record<string, string> {
   };
 }
 
-/** Pass through an upstream error response, preserving relevant headers. */
 export function upstreamErrorResponse(
   res: Response,
   body: string,
@@ -103,13 +95,11 @@ export function upstreamErrorResponse(
     if (value) headers.set(name, value);
   }
   if (requestId) headers.set("X-Request-Id", requestId);
-  // Always return JSON to prevent reflected XSS from HTML error pages
   headers.set("Content-Type", "application/json");
   let safeBody = body;
   try {
-    JSON.parse(body); // validate it's already JSON
+    JSON.parse(body);
   } catch {
-    // Wrap non-JSON error bodies to prevent XSS
     safeBody = JSON.stringify({
       error: { type: "upstream_error", message: body.slice(0, 2000) },
     });
@@ -124,10 +114,6 @@ export function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/**
- * Wraps a proxy request handler with standard error handling.
- * Catches AbortError (timeout) and generic errors, returning appropriate error responses.
- */
 export async function wrapProxyRequest(
   reqId: string,
   handler: () => Promise<Response>,
@@ -140,10 +126,6 @@ export async function wrapProxyRequest(
   }
 }
 
-/**
- * Build a passthrough response preserving key headers from the upstream.
- * Used when no format translation is needed (same-format proxying).
- */
 export function passthroughResponse(res: Response): Response {
   const headers: Record<string, string> = {
     "Content-Type": res.headers.get("Content-Type") || "application/json",

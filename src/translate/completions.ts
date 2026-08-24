@@ -13,10 +13,6 @@ import { getTextEncoder, getTextDecoder, getOptimalBufferConfig } from '../strea
 const BUFFER_CONFIG = getOptimalBufferConfig();
 const MAX_BUFFER_SIZE = BUFFER_CONFIG.maxSize;
 
-// ==========================================
-// OpenAI Legacy Completion <-> OpenAI Chat
-// ==========================================
-
 export function formatOpenAICompletionToOpenAIChat(body: OpenAICompletionRequest): OpenAIRequest {
   const { model, prompt, temperature, max_tokens, top_p, stop, stream } = body;
   const chatRequest: OpenAIRequest = {
@@ -127,10 +123,6 @@ export function streamOpenAIChatToOpenAICompletion(chatStream: ReadableStream<Ui
     },
   });
 }
-
-// ==========================================
-// OpenAI Legacy Completion <-> Anthropic Messages
-// ==========================================
 
 export function formatAnthropicToOpenAICompletion(body: AnthropicRequest): OpenAICompletionRequest {
   const { model, messages, system, temperature, max_tokens, top_p, stop_sequences, stream } = body;
@@ -373,27 +365,37 @@ export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<U
           });
         }
       }
-      
+
+      // Parse one SSE data payload (JSON) and forward its text delta.
+      const processDataPayload = (data: string): void => {
+        if (data === "[DONE]") return;
+        try {
+          const parsed = JSON.parse(data);
+          const text = parsed.choices?.[0]?.text;
+          if (text !== undefined) processStreamDelta(text, parsed);
+        } catch (e) {
+          throw new StreamParseError(data, e instanceof Error ? e : new Error(String(e)));
+        }
+      };
+
+      // SSE events are delimited by a blank line ("\n\n"); within an event the
+      // "data:" lines are concatenated per the SSE spec. Splitting on "\n\n"
+      // (not "\n") keeps multi-line data and event framing intact.
+      const processFrame = (frame: string): void => {
+        const data = frame
+          .split("\n")
+          .filter((l) => l.startsWith("data: "))
+          .map((l) => l.slice(6))
+          .join("\n")
+          .trim();
+        if (data) processDataPayload(data);
+      };
+
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) {
-            if (buffer.trim()) {
-              const lines = buffer.split('\n');
-              for (const line of lines) {
-                if (line.trim() && line.startsWith('data: ')) {
-                  const data = line.slice(6).trim();
-                  if (data === '[DONE]') continue;
-                  try {
-                    const parsed = JSON.parse(data);
-                    const text = parsed.choices?.[0]?.text;
-                    if (text !== undefined) processStreamDelta(text, parsed);
-                  } catch (e) {
-                    throw new StreamParseError(data, e instanceof Error ? e : new Error(String(e)));
-              }
-                }
-              }
-            }
+            if (buffer.trim()) processFrame(buffer);
             break;
           }
           const chunk = decoder.decode(value, { stream: true });
@@ -402,20 +404,10 @@ export function streamOpenAICompletionToAnthropic(openaiStream: ReadableStream<U
             reader.releaseLock();
             throw new StreamBufferOverflowError(buffer.length, MAX_BUFFER_SIZE);
           }
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          for (const line of lines) {
-            if (line.trim() && line.startsWith('data: ')) {
-              const data = line.slice(6).trim();
-              if (data === '[DONE]') continue;
-              try {
-                const parsed = JSON.parse(data);
-                const text = parsed.choices?.[0]?.text;
-                if (text !== undefined) processStreamDelta(text, parsed);
-              } catch (e) {
-                throw new StreamParseError(data, e instanceof Error ? e : new Error(String(e)));
-              }
-            }
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() || '';
+          for (const frame of frames) {
+            if (frame.trim()) processFrame(frame);
           }
         }
       } finally {

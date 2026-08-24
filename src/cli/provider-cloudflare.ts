@@ -1,11 +1,11 @@
 import { writeFileSync } from "node:fs";
-import { t, select, input, createSpinner, badge, section, error } from "./ui";
+import { t, select, input, inputRequired, createSpinner, badge, error } from "./ui";
 import {
   CLOUDFLARE_CONFIG_FILE,
   getCloudflareConfigSaved,
 } from "./config";
 import { storeCloudflareApiToken } from "../secure-storage";
-import { savePreferences } from "./preferences";
+import { getPreferences, savePreferences } from "./preferences";
 
 export async function getCloudflareConfigInteractive(): Promise<{
   apiToken: string;
@@ -29,12 +29,11 @@ export async function getCloudflareConfigInteractive(): Promise<{
 
   if (hasSaved) {
     console.log(
-      `  ${t.muted("Saved Cloudflare config found — press Enter to keep or type new values to update.")}\n`,
+      `  ${t.muted("Saved Cloudflare config found — press Enter to keep or type new values to update.")}`,
     );
   } else {
-    section("Cloudflare AI Gateway Setup");
     console.log(
-      `  Configure Cloudflare Workers AI via AI Gateway\n`,
+      `  Configure Cloudflare Workers AI via AI Gateway`,
     );
   }
 
@@ -49,8 +48,9 @@ export async function getCloudflareConfigInteractive(): Promise<{
 
   const config = { accountId: accountId.trim(), gatewayId: gatewayId.trim(), apiToken: apiToken.trim() };
 
-  // Save accountId/gatewayId to config file
-  writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify(config, null, 2), {
+  // Persist only non-secret fields to disk; the API token lives only in the
+  // encrypted vault (storeCloudflareApiToken below), never in plaintext.
+  writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify({ accountId: config.accountId, gatewayId: config.gatewayId }, null, 2), {
     encoding: "utf-8",
     mode: 0o600,
   });
@@ -111,20 +111,28 @@ export async function setupCloudflareInteractive(): Promise<{
   );
 
   let selectedModel = "";
+  // Cloudflare model IDs always start with "@cf/".
+  const validateCfModelId = (v: string): string | null =>
+    v.startsWith("@cf/")
+      ? null
+      : "Cloudflare model IDs start with @cf/ (e.g. @cf/meta/llama-3.3-70b-instruct)";
+
   if (rawModels.length === 0) {
-    selectedModel = await input(
+    selectedModel = await inputRequired(
       "Enter your Cloudflare model ID (e.g. @cf/meta/llama-3.3-70b-instruct)",
-      "@cf/moonshotai/kimi-k2.6",
+      validateCfModelId,
     );
-    if (!selectedModel) selectedModel = "@cf/moonshotai/kimi-k2.6";
   } else {
-    const choices = [...rawModels, "✏️ Enter Custom Model ID"];
-    const modelRes = await select("Choose a Cloudflare model", choices, {
-      defaultIndex: 0,
+    const prefs = getPreferences();
+    const activeModel = prefs.providerModels?.cloudflare || prefs.defaultModel;
+    const defaultIdx = activeModel && rawModels.indexOf(activeModel) >= 0 ? rawModels.indexOf(activeModel) : 0;
+    const modelRes = await select("Choose a Cloudflare model", rawModels, {
+      defaultIndex: defaultIdx,
+      customLabel: "Custom model ID (enter manually)",
     });
-    if (modelRes.index === -1 || modelRes.index === choices.length - 1) {
-      selectedModel = await input("Enter model ID", rawModels[0]);
-      if (!selectedModel) selectedModel = rawModels[0];
+    if (modelRes.index === -1) {
+      // Custom entry: don't silently fall back to the list item they declined.
+      selectedModel = await inputRequired("Enter model ID", validateCfModelId);
     } else {
       selectedModel = modelRes.value;
     }

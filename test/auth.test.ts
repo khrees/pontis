@@ -11,6 +11,14 @@ describe('extractApiKey', () => {
     expect(extractApiKey({ 'authorization': 'Bearer sk-test-key-32-chars-minimum-here' })).toBe('sk-test-key-32-chars-minimum-here');
   });
 
+  it('extracts from lowercase bearer in Authorization header', () => {
+    expect(extractApiKey({ 'Authorization': 'bearer AIzaSyTestKey123456789' })).toBe('AIzaSyTestKey123456789');
+  });
+
+  it('extracts from x-goog-api-key header', () => {
+    expect(extractApiKey({ 'x-goog-api-key': 'AIzaSyGoogleKey12345' })).toBe('AIzaSyGoogleKey12345');
+  });
+
   it('prefers X-Api-Key over Authorization', () => {
     const result = extractApiKey({
       'x-api-key': 'sk-primary',

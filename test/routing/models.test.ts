@@ -17,12 +17,17 @@ describe('GET /v1/models — model discovery', () => {
     delete process.env.PONTIS_UPSTREAM_FORMAT;
   });
 
-  it('routes /v1/models to Anthropic models endpoint with Anthropic headers', async () => {
+  it('returns opencode models in Anthropic shape for Anthropic-style clients', async () => {
     process.env.PONTIS_UPSTREAM_URL = 'https://api.anthropic.com';
     process.env.PONTIS_UPSTREAM_FORMAT = 'anthropic';
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('{"data":[]}', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      new Response(JSON.stringify({
+        data: [
+          { id: 'mimo-v2.5-free', object: 'model', created: 1234, owned_by: 'opencode' },
+          { id: 'deepseek-v4-flash-free', object: 'model', created: 1234, owned_by: 'opencode' },
+        ]
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
 
     const request = new Request('https://proxy.example/v1/models', {
@@ -33,20 +38,32 @@ describe('GET /v1/models — model discovery', () => {
       },
     });
 
-    await worker.fetch(request);
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
 
-    expect(fetchMock).toHaveBeenCalledWith('https://api.anthropic.com/v1/models', expect.objectContaining({
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Api-Key': key,
-        'Anthropic-Version': '2023-06-01',
-        'Anthropic-Beta': 'tools-2024-04-04',
-      },
-    }));
+    // Must have fetched from opencode ZEN (our canonical source), NOT from api.anthropic.com
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('opencode.ai'),
+      expect.anything(),
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('api.anthropic.com'),
+      expect.anything(),
+    );
+
+    // Response must be in Anthropic's /v1/models shape
+    const json = await response.json() as { data: {id: string, display_name: string, type: string}[], has_more: boolean };
+    expect(json.data).toBeDefined();
+    expect(Array.isArray(json.data)).toBe(true);
+    expect(json.has_more).toBe(false);
+    // Model entries should include opencode model IDs with Anthropic-shaped fields
+    const mimoEntry = json.data.find((m) => m.id === 'mimo-v2.5-free');
+    expect(mimoEntry).toBeDefined();
+    expect(mimoEntry!.display_name).toBe('mimo-v2.5-free');
+    expect(mimoEntry!.type).toBe('model');
   });
 
-  it('routes /go-prefixed model discovery to OpenCode Go models', async () => {
+  it('routes /go-prefixed model discovery to OpenCode ZEN (canonical source)', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('{"data":[]}', { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
@@ -57,10 +74,11 @@ describe('GET /v1/models — model discovery', () => {
 
     await worker.fetch(request);
 
-    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/go/v1/models', expect.objectContaining({
-      method: 'GET',
-      headers: { Authorization: `Bearer ${key}` },
-    }));
+    // The canonical model source is always ZEN_UPSTREAM regardless of route prefix
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('opencode.ai'),
+      expect.anything(),
+    );
   });
 
   it('routes /zen-prefixed model discovery to OpenCode Zen models', async () => {

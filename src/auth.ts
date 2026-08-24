@@ -1,21 +1,31 @@
-/**
- * API key extraction and validation.
- *
- * Minimum key length can be configured via PONTIS_MIN_KEY_LENGTH env var.
- * Defaults to 32 for OpenCode. Set to 0 to disable length checks (local models).
- */
-
 import { getMinKeyLength } from "./env";
 import { InvalidApiKeyError, ApiKeyLengthError, errorToResponse } from "./errors";
 
 export { getMinKeyLength };
 
 export function extractApiKey(headers: Headers | Record<string, string | null>): string | null {
-  const get = (name: string) => {
+  const get = (name: string): string | null => {
     if (headers instanceof Headers) return headers.get(name);
-    return (headers as Record<string, string | null>)[name.toLowerCase()] || null;
+    const lowerName = name.toLowerCase();
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === lowerName) {
+        return (headers as Record<string, string | null>)[key] || null;
+      }
+    }
+    return null;
   };
-  return get("X-Api-Key") || get("Authorization")?.replace("Bearer ", "")?.trim() || null;
+  const xApiKey = get("x-api-key");
+  if (xApiKey) return xApiKey;
+
+  const auth = get("authorization");
+  if (auth) {
+    return auth.replace(/^bearer\s+/i, "").trim() || null;
+  }
+
+  const googApiKey = get("x-goog-api-key");
+  if (googApiKey) return googApiKey;
+
+  return null;
 }
 
 export function validateApiKey(key: string | null): null | never {

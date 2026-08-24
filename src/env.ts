@@ -1,12 +1,3 @@
-/**
- * Centralized environment variable access.
- *
- * Cloudflare Workers do not provide `process.env`, so all access goes through
- * typed helpers with optional chaining and sensible defaults. The `declare`
- * lives in this single module so every other file can import safe accessors
- * instead of scattering `declare const process` across the codebase.
- */
-
 declare const process: { env?: Record<string, string | undefined> } | undefined;
 
 function getRawEnv(name: string): string | undefined {
@@ -16,14 +7,10 @@ function getRawEnv(name: string): string | undefined {
   return undefined;
 }
 
-// ── Generic accessors ──
-
-/** Read a string env var. Returns `fallback` when unset or empty. */
 export function getEnv(name: string, fallback = ""): string {
   return getRawEnv(name) || fallback;
 }
 
-/** Read a number env var. Returns `fallback` when unset, empty, or NaN. */
 export function getEnvAsNumber(
   name: string,
   fallback: number,
@@ -37,12 +24,9 @@ export function getEnvAsNumber(
   return n;
 }
 
-/** Read a boolean env var (true when value is the string "true"). */
 export function getEnvAsBoolean(name: string): boolean {
   return getRawEnv(name) === "true";
 }
-
-// ── Named accessors for Pontis env vars ──
 
 export function getProvider(): string {
   return (getRawEnv("PONTIS_PROVIDER") || "").toLowerCase();
@@ -122,8 +106,6 @@ export function getTimeoutMs(fallback = 120000): number {
 export function hasProcess(): boolean {
   return typeof process !== "undefined";
 }
-
-// ── Debug helpers ──
 
 export function isDebug(): boolean {
   return getRawEnv("PONTIS_DEBUG") === "true";

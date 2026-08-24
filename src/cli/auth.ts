@@ -6,6 +6,7 @@ import {
   getCloudflareConfigSaved,
   getOpenCodeApiKey,
   getLocalApiKey,
+  getGoogleAuthToken,
 } from "./config";
 import {
   storeOpenCodeApiKey,
@@ -14,6 +15,8 @@ import {
   deleteCloudflareApiToken,
   storeLocalApiKey,
   deleteLocalApiKey,
+  storeGoogleApiKey,
+  deleteGoogleApiKey,
   clearAllCredentials,
 } from "../secure-storage";
 import { getPreferences, savePreferences } from "./preferences";
@@ -35,12 +38,17 @@ export interface AuthStatus {
     endpoint: string;
     keyMasked: string | null;
   };
+  google: {
+    configured: boolean;
+    keyMasked: string | null;
+  };
 }
 
 export function getAuthStatus(): AuthStatus {
   const openCodeKey = getOpenCodeApiKey();
   const cf = getCloudflareConfigSaved();
   const localKey = getLocalApiKey();
+  const googleToken = getGoogleAuthToken();
   const prefs = getPreferences();
 
   const isLocalCustomKey = localKey && localKey !== "local-model-dummy-api-key-value-32-chars-long";
@@ -61,12 +69,13 @@ export function getAuthStatus(): AuthStatus {
       endpoint: prefs.localEndpoint || process.env.PONTIS_UPSTREAM_URL || "http://localhost:11434/v1",
       keyMasked: isLocalCustomKey ? redactKey(localKey) : null,
     },
+    google: {
+      configured: !!googleToken,
+      keyMasked: googleToken ? redactKey(googleToken) : null,
+    },
   };
 }
 
-/**
- * List / display saved authentication details.
- */
 export function cmdAuthStatus(opts?: { json?: boolean }): void {
   const status = getAuthStatus();
 
@@ -76,14 +85,18 @@ export function cmdAuthStatus(opts?: { json?: boolean }): void {
 
   section("Saved Authentication & API Keys");
 
-  // OpenCode
+  if (status.google.configured) {
+    kv("Google (Gemini)", `${t.success("✓ Saved")}  ${t.muted(`(AI Studio Key · ${status.google.keyMasked})`)}`);
+  } else {
+    kv("Google (Gemini)", `${t.muted("○ Not configured")}  ${t.muted("(Run: pontis auth set google)")}`);
+  }
+
   if (status.opencode.configured) {
     kv("OpenCode", `${t.success("✓ Saved")}  ${t.muted(`(${status.opencode.keyMasked})`)}`);
   } else {
     kv("OpenCode", `${t.muted("○ Not configured")}  ${t.muted("(Run: pontis auth set opencode)")}`);
   }
 
-  // Cloudflare
   if (status.cloudflare.configured) {
     const details = `Account: ${status.cloudflare.accountId} · Gateway: ${status.cloudflare.gatewayId} · Token: ${status.cloudflare.tokenMasked}`;
     kv("Cloudflare", `${t.success("✓ Saved")}  ${t.muted(`(${details})`)}`);
@@ -91,7 +104,6 @@ export function cmdAuthStatus(opts?: { json?: boolean }): void {
     kv("Cloudflare", `${t.muted("○ Not configured")}  ${t.muted("(Run: pontis auth set cloudflare)")}`);
   }
 
-  // Local
   kv("Local", `${t.success("✓ Ready")}  ${t.muted(`(${status.local.endpoint})`)}`);
   if (status.local.keyMasked) {
     kv("Local Key", t.muted(status.local.keyMasked));
@@ -103,24 +115,26 @@ export function cmdAuthStatus(opts?: { json?: boolean }): void {
   console.log();
 }
 
-/**
- * Add or update an API key for a provider.
- */
 export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise<void> {
   let provider = providerArg?.toLowerCase().trim();
+  if (provider === "gemini") provider = "google";
 
   if (!provider) {
     const res = await select("Which provider's credentials do you want to configure?", [
-      `${t.primary("OpenCode")}     ${t.muted("Free cloud models (Zen/Go)")}`,
-      `${t.primary("Cloudflare")}   ${t.muted("Workers AI via AI Gateway")}`,
-      `${t.primary("Local")}        ${t.muted("Ollama, LM Studio, Llama.cpp…")}`,
+      `${t.primary("Google (Gemini)")} ${t.muted("Free Gemini & Gemma models (AI Studio key)")}`,
+      `${t.primary("OpenCode")}        ${t.muted("Free cloud models (Zen/Go)")}`,
+      `${t.primary("Cloudflare")}      ${t.muted("Workers AI via AI Gateway")}`,
+      `${t.primary("Local")}           ${t.muted("Ollama, LM Studio, Llama.cpp…")}`,
     ], { allowCustom: false, defaultIndex: 0 });
 
     switch (res.index) {
       case 0:
-        provider = "opencode";
+        provider = "google";
         break;
       case 1:
+        provider = "opencode";
+        break;
+      case 2:
         provider = "cloudflare";
         break;
       default:
@@ -130,11 +144,28 @@ export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise
   }
 
   switch (provider) {
+    case "google": {
+      section("Configure Google AI Studio API Key");
+      let key = keyArg;
+      if (!key) {
+        console.log(`  1. Open ${t.secondary("https://aistudio.google.com/apikey")} in your browser`);
+        console.log(`  2. Click ${t.bold('"Create API key"')} (100% Free with standard Google account)`);
+        console.log(`  3. Paste the key below:`);
+        key = await input("Paste your Google API key", undefined, true);
+      }
+      if (!key || !key.trim()) {
+        badge("error", "API key cannot be empty.");
+        process.exit(1);
+      }
+      storeGoogleApiKey(key.trim());
+      badge("success", "Google API key saved securely");
+      break;
+    }
     case "opencode": {
       section("Configure OpenCode API Key");
       let key = keyArg;
       if (!key) {
-        console.log(`  Get your key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys\n`);
+        console.log(`  Get your key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys`);
         key = await input("Paste your OpenCode API key", undefined, true);
       }
       if (!key) {
@@ -169,7 +200,8 @@ export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise
       }
 
       const config = { accountId: accountId.trim(), gatewayId: gatewayId.trim(), apiToken: apiToken.trim() };
-      writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify(config, null, 2), {
+      // Persist only non-secret fields to disk; the token lives in the vault.
+      writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify({ accountId: config.accountId, gatewayId: config.gatewayId }, null, 2), {
         encoding: "utf-8",
         mode: 0o600,
       });
@@ -200,7 +232,7 @@ export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise
       break;
     }
     default: {
-      badge("error", `Unknown provider "${provider}". Use: opencode | cloudflare | local`);
+      badge("error", `Unknown provider "${provider}". Use: google | opencode | cloudflare | local`);
       process.exit(1);
     }
   }
@@ -211,10 +243,12 @@ export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise
  */
 export async function cmdAuthRemove(providerArg?: string): Promise<void> {
   let provider = providerArg?.toLowerCase().trim();
+  if (provider === "gemini") provider = "google";
 
   if (!provider) {
     const status = getAuthStatus();
     const choices = [
+      `Google ${status.google.configured ? t.success("✓ Configured") : t.muted("○ Empty")}`,
       `OpenCode ${status.opencode.configured ? t.success("✓ Configured") : t.muted("○ Empty")}`,
       `Cloudflare ${status.cloudflare.configured ? t.success("✓ Configured") : t.muted("○ Empty")}`,
       `Local Key ${status.local.keyMasked ? t.success("✓ Configured") : t.muted("○ Default")}`,
@@ -225,15 +259,18 @@ export async function cmdAuthRemove(providerArg?: string): Promise<void> {
     const res = await select("Which credentials do you want to remove?", choices, { allowCustom: false });
     switch (res.index) {
       case 0:
-        provider = "opencode";
+        provider = "google";
         break;
       case 1:
-        provider = "cloudflare";
+        provider = "opencode";
         break;
       case 2:
-        provider = "local";
+        provider = "cloudflare";
         break;
       case 3:
+        provider = "local";
+        break;
+      case 4:
         provider = "all";
         break;
       default:
@@ -247,6 +284,11 @@ export async function cmdAuthRemove(providerArg?: string): Promise<void> {
   }
 
   switch (provider) {
+    case "google": {
+      deleteGoogleApiKey();
+      badge("success", "Google API key removed");
+      break;
+    }
     case "opencode": {
       deleteOpenCodeApiKey();
       badge("success", "OpenCode API key removed");
@@ -269,7 +311,7 @@ export async function cmdAuthRemove(providerArg?: string): Promise<void> {
       break;
     }
     default: {
-      badge("error", `Unknown provider "${provider}". Use: opencode | cloudflare | local | all`);
+      badge("error", `Unknown provider "${provider}". Use: google | opencode | cloudflare | local | all`);
       process.exit(1);
     }
   }

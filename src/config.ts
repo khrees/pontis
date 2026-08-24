@@ -23,6 +23,9 @@ export function getVisionModel(): string {
   if (getProvider() === "cloudflare") {
     return "@cf/meta/llama-3.2-11b-vision-instruct";
   }
+  if (getProvider() === "google") {
+    return "gemini-2.5-flash";
+  }
   return VISION_MODEL;
 }
 
@@ -43,20 +46,13 @@ const KNOWN_OPENCODE_PREFIXES = [
   "command",
   "minimax",
   "north",
-];
-
-const PAID_TO_FREE: Record<string, string> = {
-  "deepseek-v4-flash": "deepseek-v4-flash-free",
-  "mimo-v2.5": "mimo-v2.5-free",
-  "nemotron-3-ultra": "nemotron-3-ultra-free",
-  "north-mini-code": "north-mini-code-free",
-};
-
-const PREFIX_TO_FREE: [string, string][] = [
-  ["deepseek", "deepseek-v4-flash-free"],
-  ["mimo", "mimo-v2.5-free"],
-  ["nemotron", "nemotron-3-ultra-free"],
-  ["north", "north-mini-code-free"],
+  "grok",
+  "kimi",
+  "glm",
+  "hy3",
+  "laguna",
+  "muse",
+  "ox",
 ];
 
 export type RouteConfig = {
@@ -74,6 +70,9 @@ export function getDefaultFreeModel(): string {
   if (getProvider() === "local") {
     return "llama3";
   }
+  if (getProvider() === "google") {
+    return "gemini-2.5-flash";
+  }
   return "mimo-v2.5-free";
 }
 
@@ -82,18 +81,13 @@ export function resolveModel(model: string): string {
   if (!model) return defaultFreeModel;
 
   const lower = model.toLowerCase();
-  if (lower.startsWith("@cf/")) {
+  if (lower.startsWith("@cf/") || lower.startsWith("gemini-") || lower.startsWith("gemma-")) {
     return model;
   }
 
-  if (PAID_TO_FREE[lower]) return PAID_TO_FREE[lower];
-
-  for (const [prefix, freeModel] of PREFIX_TO_FREE) {
-    if (lower.startsWith(prefix) && !lower.endsWith("-free")) {
-      return freeModel;
-    }
-  }
-
+  // Known OpenCode model prefixes — pass through unchanged regardless of -free suffix.
+  // The upstream decides access based on the API key tier; we must not downgrade paid
+  // model IDs (e.g. deepseek-v4-flash) to free equivalents (deepseek-v4-flash-free).
   if (KNOWN_OPENCODE_PREFIXES.some((p) => lower.startsWith(p))) return model;
 
   if (
@@ -204,17 +198,12 @@ export function isCodexClient(request: Request, url: URL): boolean {
   );
 }
 
-// ──────────────────────────────────────────────
-//  Model resolution helpers (used by index.ts)
-// ──────────────────────────────────────────────
-
 export interface ResolvedModel {
   model: string;
   upstream: string;
   authErr: ReturnType<typeof import("./auth").validateApiKey>;
 }
 
-/** Check if an Anthropic request body contains image content blocks. */
 export function requestHasImages(messages: { content?: unknown }[] | undefined): boolean {
   return (messages || []).some(
     (msg) =>
@@ -223,7 +212,6 @@ export function requestHasImages(messages: { content?: unknown }[] | undefined):
   );
 }
 
-/** Resolve model + upstream + auth for a request, applying vision fallback for OpenCode or Cloudflare. */
 export function resolveModelAndUpstream(
   request: Request,
   routeUpstream: string,
@@ -237,8 +225,9 @@ export function resolveModelAndUpstream(
 
   const isOpencode = baseUpstream.includes("opencode.ai") || provider === "opencode";
   const isCloudflare = baseUpstream.includes("gateway.ai.cloudflare.com") || provider === "cloudflare";
+  const isGoogle = baseUpstream.includes("googleapis.com") || provider === "google";
 
-  if (isOpencode || isCloudflare) {
+  if (isOpencode || isCloudflare || isGoogle) {
     resolvedModel = resolveModel(resolvedModel);
     if (options?.hasVision) {
       resolvedModel = getVisionModel();
@@ -249,9 +238,9 @@ export function resolveModelAndUpstream(
   let authErr = null;
   if (isOpencode) {
     authErr = validateApiKey(key);
-  } else if (isCloudflare) {
+  } else if (isCloudflare || isGoogle) {
     if (!key) {
-      throw new InvalidApiKeyError("Missing API key. Provide x-api-key header.");
+      throw new InvalidApiKeyError("Missing API key. Provide x-api-key or Authorization header.");
     }
   }
   return { model: resolvedModel, upstream, authErr };

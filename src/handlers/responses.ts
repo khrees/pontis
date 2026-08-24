@@ -73,6 +73,10 @@ export async function handleResponsesRequest(
     // When Codex traffic is redirected from api.openai.com → localhost via
     // pf/hosts, Codex sends its stored OpenAI key (sk-...). Override with
     // the OpenCode key from the environment so the upstream accepts it.
+    // SECURITY: this substitutes the server's credential for ANY "sk-*" key,
+    // so this endpoint effectively requires no client auth. That is only safe
+    // because the server binds to loopback (see local-server.ts getHost). Do
+    // not bind to a non-loopback address without adding real authentication.
     const key = (requestKey && requestKey.startsWith("sk-") && process.env.OPENAI_API_KEY)
       ? process.env.OPENAI_API_KEY
       : requestKey;

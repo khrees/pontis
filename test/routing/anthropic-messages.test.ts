@@ -6,23 +6,35 @@ import {
   type CapturedRequestBody,
 } from '../helpers';
 
+import { clearDiscoveredFreeModels } from '../../src/opencode-models';
+
 interface TestProcess {
   env: Record<string, string | undefined>;
 }
 declare const process: TestProcess;
 
 const key = 'a'.repeat(32);
+const originalFetch = globalThis.fetch;
 
 describe('POST /v1/messages — Anthropic endpoint', () => {
   beforeEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    clearDiscoveredFreeModels();
+    process.env.PONTIS_DIR = '/tmp/pontis-test-empty';
     delete process.env.PONTIS_PROVIDER;
+    delete process.env.PONTIS_MODEL;
     delete process.env.PONTIS_UPSTREAM_URL;
     delete process.env.PONTIS_UPSTREAM_FORMAT;
   });
 
   afterEach(() => {
+    globalThis.fetch = originalFetch;
+    clearDiscoveredFreeModels();
     vi.restoreAllMocks();
+    delete process.env.PONTIS_DIR;
     delete process.env.PONTIS_PROVIDER;
+    delete process.env.PONTIS_MODEL;
     delete process.env.PONTIS_UPSTREAM_URL;
     delete process.env.PONTIS_UPSTREAM_FORMAT;
   });
@@ -512,5 +524,62 @@ describe('POST /v1/messages — Anthropic endpoint', () => {
       }),
     );
     delete process.env.PONTIS_PROVIDER;
+  });
+
+  it('preserves paid OpenCode model IDs unchanged — does not remap deepseek-v4-flash to deepseek-v4-flash-free', async () => {
+    // When a user has a paid API key they can request paid models directly.
+    // The proxy must not silently downgrade deepseek-v4-flash → deepseek-v4-flash-free.
+    let capturedUrl = '';
+    let capturedBody: CapturedRequestBody | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url, init?: RequestInit) => {
+        capturedUrl = url.toString();
+        capturedBody = parseCapturedBody(init?.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({ model: 'deepseek-v4-flash', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+
+    await worker.fetch(request);
+
+    // Paid model → routes to Go endpoint (not Zen)
+    expect(capturedUrl).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+    // Model ID must be preserved as-is
+    expect(capturedBody!.model).toBe('deepseek-v4-flash');
+  });
+
+  it('preserves free OpenCode model IDs unchanged and routes them to Zen', async () => {
+    let capturedUrl = '';
+    let capturedBody: CapturedRequestBody | null = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url, init?: RequestInit) => {
+        capturedUrl = url.toString();
+        capturedBody = parseCapturedBody(init?.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({ model: 'deepseek-v4-flash-free', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+
+    await worker.fetch(request);
+
+    // Free model → routes to Zen endpoint
+    expect(capturedUrl).toBe('https://opencode.ai/zen/v1/chat/completions');
+    expect(capturedBody!.model).toBe('deepseek-v4-flash-free');
   });
 });

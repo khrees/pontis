@@ -62,7 +62,7 @@ while [ $# -gt 0 ]; do
     --help|-h)
       echo "Pontis Installer 🌌"
       echo ""
-      echo "Usage: curl -fsSL https://pontis.dev/install.sh | bash [-- <flags>]"
+      echo "Usage: curl -fsSL https://pontis.khrees.com/install | bash [-- <flags>]"
       echo ""
       echo "Flags:"
       echo "  --with-clients     Install all client tools (Claude Code, Codex, OpenCode, Pi)"

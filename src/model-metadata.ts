@@ -1,7 +1,3 @@
-/**
- * Model-specific metadata for Codex CLI compatibility.
- */
-
 export interface ModelMetadata {
   context_window: number;
   max_output_tokens: number;
@@ -31,7 +27,6 @@ const DEFAULT_METADATA: ModelMetadata = {
   experimental_supported_tools: CODEX_CORE_TOOLS,
 };
 
-/** Per-model overrides. Only fields that differ from defaults need to be set. */
 export const KNOWN_MODEL_METADATA: Record<string, Partial<ModelMetadata>> = {
   "mimo-v2.5-free": {
     context_window: 131072,

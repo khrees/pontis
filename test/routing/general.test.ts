@@ -12,4 +12,13 @@ describe('General routing', () => {
     expect(response.status).toBe(302);
     expect(response.headers.get('Location')).toBe('https://raw.githubusercontent.com/khrees/pontis/main/install.sh');
   });
+
+  it('serves interactive HTML documentation at /docs', async () => {
+    const request = new Request('https://proxy.example/docs');
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toContain('text/html');
+    const html = await response.text();
+    expect(html).toContain('Pontis');
+  });
 });

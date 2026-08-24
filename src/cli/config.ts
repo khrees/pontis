@@ -1,11 +1,13 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   retrieveOpenCodeApiKey,
   retrieveCloudflareApiToken,
+  storeCloudflareApiToken,
   retrieveLocalApiKey,
+  retrieveGoogleApiKey,
 } from "../secure-storage";
 import {
   getPreferences,
@@ -28,6 +30,8 @@ export const DIST_PROXY = join(ROOT, "dist", "proxy.js");
 export const SRC_DIR = join(ROOT, "src");
 export const CLOUDFLARE_CONFIG_FILE = join(PONTIS_DIR, "cloudflare.json");
 
+export const GOOGLE_DEFAULT_UPSTREAM = "https://generativelanguage.googleapis.com/v1beta/openai";
+
 export const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
 export const PI_MODELS_FILE = join(PI_AGENT_DIR, "models.json");
 
@@ -41,7 +45,7 @@ export const OPENCODE_AUTH_FILE = join(OPENCODE_DATA_DIR, "auth.json");
 export interface PontisEnv {
   clientCmd?: string;
   model?: string;
-  provider?: "opencode" | "local" | "cloudflare";
+  provider?: "opencode" | "local" | "cloudflare" | "google";
   apiKey?: string;
   upstreamUrl?: string;
   upstreamFormat?: string;
@@ -49,16 +53,22 @@ export interface PontisEnv {
 
 /** Parse a string into a known provider, or null if unrecognized. */
 export function normalizeProvider(value?: string | null): ProviderType | null {
-  return value === "opencode" || value === "cloudflare" || value === "local"
-    ? value
-    : null;
+  if (!value) return null;
+  const lower = value.toLowerCase().trim();
+  if (lower === "opencode" || lower === "cloudflare" || lower === "local" || lower === "google") {
+    return lower;
+  }
+  if (lower === "gemini") {
+    return "google";
+  }
+  return null;
 }
 
 export function getCloudflareConfigSaved(): { apiToken?: string; accountId?: string; gatewayId?: string } {
   // Try secure storage first for the token
   const secureApiToken = retrieveCloudflareApiToken();
 
-  // Legacy file may have accountId, gatewayId, and potentially the token
+  // Legacy file may have accountId/gatewayId (and, in older versions, the token)
   let legacy: Record<string, string | undefined> = {};
   if (existsSync(CLOUDFLARE_CONFIG_FILE)) {
     try {
@@ -66,7 +76,20 @@ export function getCloudflareConfigSaved(): { apiToken?: string; accountId?: str
     } catch {}
   }
 
-  // Merge: prefer token from secure storage, take accountId/gatewayId from legacy
+  // Migrate a legacy plaintext token into the encrypted vault and scrub it
+  // from the on-disk file so the token is never stored in plaintext.
+  if (legacy.apiToken) {
+    try {
+      if (!secureApiToken) storeCloudflareApiToken(legacy.apiToken);
+      const { apiToken: _omit, ...rest } = legacy;
+      writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify(rest, null, 2), {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+    } catch {}
+  }
+
+  // Merge: prefer token from secure storage, take accountId/gatewayId from file
   return {
     apiToken: secureApiToken || legacy.apiToken,
     accountId: legacy.accountId,
@@ -89,12 +112,27 @@ export function getLocalApiKey(): string {
   );
 }
 
+export function getGoogleApiKey(): string | null {
+  return (
+    retrieveGoogleApiKey() ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    null
+  );
+}
+
+export function getGoogleAuthToken(): string | null {
+  return getGoogleApiKey();
+}
+
 export function getDefaultModelForProvider(provider?: ProviderType | string | null): string {
   switch (provider) {
     case "cloudflare":
       return "@cf/moonshotai/kimi-k2.6";
     case "local":
       return "llama3";
+    case "google":
+      return "gemini-2.5-flash";
     case "opencode":
     default:
       return "mimo-v2.5-free";
@@ -107,6 +145,8 @@ export function getProviderDisplayName(provider?: ProviderType | string | null):
       return "Cloudflare AI Gateway";
     case "local":
       return "Local";
+    case "google":
+      return "Google (Gemini)";
     case "opencode":
     default:
       return "OpenCode";
@@ -132,6 +172,7 @@ export interface ResolveInput {
   /** Credential detection fallbacks. */
   hasOpenCodeKey: boolean;
   hasCloudflareConfig: boolean;
+  hasGoogleKey?: boolean;
 }
 
 const OPENCODE_SPECIFIC_MODELS = new Set([
@@ -165,6 +206,9 @@ export function isModelCompatibleWithProvider(
   if (provider === "cloudflare") {
     return model.startsWith("@cf/");
   }
+  if (provider === "google") {
+    return model.startsWith("gemini-") || model.startsWith("gemma-");
+  }
   if (provider === "opencode") {
     return !model.startsWith("@cf/") && !model.startsWith("http://") && !model.startsWith("https://");
   }
@@ -189,6 +233,7 @@ export function resolveProviderAndModel(input: ResolveInput): ResolvedConfig {
     (input.upstream || input.envUpstream ? "local" : null) ??
     normalizeProvider(prefs.defaultProvider) ??
     normalizeProvider(lastUsed?.provider) ??
+    (input.hasGoogleKey ? "google" : null) ??
     (input.hasOpenCodeKey ? "opencode" : null) ??
     (input.hasCloudflareConfig ? "cloudflare" : null) ??
     (prefs.localEndpoint ? "local" : null) ??
@@ -225,6 +270,7 @@ export function resolveActiveProviderAndModel(options?: {
     envModel: process.env.PONTIS_MODEL,
     envUpstream: process.env.PONTIS_UPSTREAM_URL,
     prefs: getPreferences(),
+    hasGoogleKey: !!getGoogleAuthToken(),
     hasOpenCodeKey: !!getOpenCodeApiKey(),
     hasCloudflareConfig: !!(savedCf.apiToken && savedCf.accountId),
   });

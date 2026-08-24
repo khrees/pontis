@@ -1,9 +1,3 @@
-/**
- * Custom error types for consistent error handling across Pontis.
- * Each error type provides specific context and recovery information.
- */
-
-// Base error class for all Pontis-specific errors
 export class PontisError extends Error {
   constructor(
     message: string,

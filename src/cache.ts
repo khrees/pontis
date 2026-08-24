@@ -1,9 +1,3 @@
-/**
- * Prompt cache key generation and cache token extraction utilities.
- * Bridges Anthropic's explicit cache_control markers with OpenAI's automatic prefix caching.
- */
-
-/** djb2 hash of system prompt text, used as prompt_cache_key for OpenAI node affinity */
 export function hashSystemPrompt(system: string | string[] | { text: string; [key: string]: any }[] | undefined): string | null {
   if (!system) return null;
   const text = typeof system === 'string'

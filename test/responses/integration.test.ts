@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { CodexModelsListResponse } from "../../src/types";
 import {
   isMessageOutput,
@@ -7,7 +7,27 @@ import {
   parseResponsesJson,
 } from "../helpers";
 
+const originalFetch = globalThis.fetch;
+
 describe("Responses API integration", () => {
+  beforeEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    delete process.env.PONTIS_PROVIDER;
+    delete process.env.PONTIS_MODEL;
+    delete process.env.PONTIS_UPSTREAM_URL;
+    delete process.env.PONTIS_UPSTREAM_FORMAT;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    delete process.env.PONTIS_PROVIDER;
+    delete process.env.PONTIS_MODEL;
+    delete process.env.PONTIS_UPSTREAM_URL;
+    delete process.env.PONTIS_UPSTREAM_FORMAT;
+  });
+
   it("returns 200 for basic non-streaming response", async () => {
     const { default: worker } = await import("../../src/index");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

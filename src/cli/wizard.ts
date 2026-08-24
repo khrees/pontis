@@ -12,6 +12,7 @@ import { selectProviderInteractive, selectClientInteractive } from "./ui";
 import { setupLocalInteractive, detectRunningLocalEngine, fetchLocalModels } from "./provider-local";
 import { setupOpenCodeInteractive, getOpenCodeApiKeyInteractive, fetchWorkingOpenCodeModels } from "./provider-opencode";
 import { setupCloudflareInteractive, getCloudflareConfigInteractive, fetchCloudflareModels } from "./provider-cloudflare";
+import { setupGoogleInteractive, getGoogleApiKeyInteractive, fetchGoogleModels } from "./provider-google";
 import { startProxy, killActiveProxy } from "./proxy-manager";
 import {
   launchClient,
@@ -28,15 +29,17 @@ import {
   getCloudflareConfigSaved,
   getLocalApiKey,
   getOpenCodeApiKey,
+  getGoogleAuthToken,
   getProviderDisplayName,
+  normalizeProvider,
   resolveActiveProviderAndModel,
+  GOOGLE_DEFAULT_UPSTREAM,
   type PontisEnv,
 } from "./config";
 import {
   checkAll,
   CLIENTS,
   type ClientName,
-  cmdClientsInteractive,
 } from "./install-engine";
 import {
   getPreferences,
@@ -45,61 +48,102 @@ import {
   getLastUsed,
   type ProviderType,
 } from "./preferences";
-import { cmdAuthInteractive } from "./auth";
 
-/**
- * Interactive wizard entrypoint.
- * If user has saved credentials, presents a fast 1-click Quick Launch menu.
- * If first-time user, guides them through minimal onboarding steps.
- */
+/** Levenshtein distance for "did you mean" suggestions. */
+function editDistance(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[] = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+
+const VALID_PROVIDERS: ProviderType[] = ["google", "opencode", "local", "cloudflare"];
+
+/** Suggest the closest valid provider for a mistyped value, or null. */
+function closestProvider(value: string): ProviderType | null {
+  const lower = value.toLowerCase().trim();
+  let best: ProviderType | null = null;
+  let bestDist = Infinity;
+  for (const p of VALID_PROVIDERS) {
+    const d = editDistance(lower, p);
+    if (d < bestDist) {
+      bestDist = d;
+      best = p;
+    }
+  }
+  // Only suggest when it's plausibly a typo (within 2 edits or a prefix).
+  return bestDist <= 2 || (best !== null && best.startsWith(lower.slice(0, 3))) ? best : null;
+}
+
 export async function runInteractiveWizard(env: PontisEnv) {
   splash();
 
   const prefs = getPreferences();
   const lastUsed = getLastUsed();
-  const openCodeKey = getOpenCodeApiKey();
-  const cfConfig = getCloudflareConfigSaved();
-  const clientStatus = checkAll();
 
-  const hasConfiguredCredentials = !!openCodeKey || !!(cfConfig.apiToken && cfConfig.accountId) || !!prefs.localEndpoint;
-
-  // Returning user with credentials -> Quick Launch Fast Path
-  if (hasConfiguredCredentials && !env.provider && !env.model && !env.clientCmd) {
-    const { provider: activeProvider, model: activeModel } = resolveActiveProviderAndModel();
-    const defaultClient = (prefs.defaultClient || lastUsed?.client || "claude") as ClientName | "server";
-
-    const defaultClientLabel = defaultClient === "server" ? "Server Mode" : CLIENTS[defaultClient]?.name || "Claude Code";
-    const providerLabel = getProviderDisplayName(activeProvider);
-
-    const quickChoices = [
-      `${t.primary(`▶ Launch ${defaultClientLabel}`)}  ${t.muted(`(${activeModel} · ${providerLabel})`)}`,
-      `${t.primary("Launch Codex CLI")}`,
-      `${t.primary("Launch OpenCode")}`,
-      `${t.primary("Launch Pi")}`,
-      `${t.primary("Run Proxy Server Only")}`,
-      `${t.muted("⚙ Switch Provider or Model")}`,
-      `${t.muted("🔑 Manage Authentication & Keys")}`,
-      `${t.muted("💻 Manage Coding Agent CLIs")}`,
-    ];
-
-    const quickRes = await select("Quick Launch", quickChoices, {
-      allowCustom: false,
-      defaultIndex: 0,
-    });
-
-    if (quickRes.index === 0) return runWithConfig(defaultClient, { model: activeModel, provider: activeProvider }, []);
-    if (quickRes.index === 1) return runWithConfig("codex", { model: activeModel, provider: activeProvider }, []);
-    if (quickRes.index === 2) return runWithConfig("opencode", { model: activeModel, provider: activeProvider }, []);
-    if (quickRes.index === 3) return runWithConfig("pi", { model: activeModel, provider: activeProvider }, []);
-    if (quickRes.index === 4) return runWithConfig("server", { model: activeModel, provider: activeProvider }, []);
-    if (quickRes.index === 6) return cmdAuthInteractive();
-    if (quickRes.index === 7) return cmdClientsInteractive();
-    // Index 5: "Switch Provider or Model" continues to Step 1 below
+  // Quick launch: with a complete previous session and no explicit overrides,
+  // offer a one-Enter relaunch (default). Anything else falls through to the
+  // full wizard.
+  if (
+    !env.provider &&
+    !env.model &&
+    !env.clientCmd &&
+    lastUsed?.client &&
+    lastUsed?.provider &&
+    lastUsed?.model
+  ) {
+    const clientName = CLIENTS[lastUsed.client as ClientName]?.name || lastUsed.client;
+    const relaunch = await select(
+      "Launch",
+      [
+        `Launch last session — ${clientName} · ${lastUsed.model} · ${getProviderDisplayName(lastUsed.provider)}`,
+        `Set up / change provider, model, or client`,
+      ],
+      { allowCustom: false, defaultIndex: 0 },
+    );
+    if (relaunch.index === 0) {
+      await runWithConfig(
+        lastUsed.client as string,
+        { provider: lastUsed.provider, model: lastUsed.model },
+        [],
+        true, // splash already shown above
+      );
+      return;
+    }
   }
 
-  // Step 1: Provider selection
+  const clientStatus = checkAll();
+  const { provider: activeProvider } = resolveActiveProviderAndModel();
+
   const detectedLocal = await detectRunningLocalEngine();
-  const provider = env.provider || (await selectProviderInteractive(detectedLocal ? `${detectedLocal.name}` : null));
+
+  // Validate an explicitly-provided provider (--provider / PONTIS_PROVIDER): an
+  // unknown value must not silently fall through to the OpenCode default and
+  // overwrite the saved provider.
+  let provider: ProviderType;
+  if (env.provider) {
+    const normalized = normalizeProvider(env.provider);
+    if (!normalized) {
+      const suggestion = closestProvider(env.provider);
+      error(
+        `Unknown provider "${env.provider}".${suggestion ? ` Did you mean "${suggestion}"?` : ""} Valid providers: google, opencode, local, cloudflare.`,
+      );
+    }
+    provider = normalized;
+  } else {
+    provider = await selectProviderInteractive(
+      detectedLocal ? `${detectedLocal.name}` : null,
+      activeProvider,
+    );
+  }
 
   // Step 2: API key + Model setup
   let model: string;
@@ -107,6 +151,14 @@ export async function runInteractiveWizard(env: PontisEnv) {
   let upstreamUrl: string | undefined;
 
   switch (provider) {
+    case "google": {
+      section("Google (Gemini) Setup");
+      const g = await setupGoogleInteractive();
+      model = env.model || g.model;
+      apiKey = env.apiKey || g.apiKey;
+      upstreamUrl = g.upstreamUrl;
+      break;
+    }
     case "local": {
       section("Local AI Setup");
       const local = await setupLocalInteractive();
@@ -133,7 +185,7 @@ export async function runInteractiveWizard(env: PontisEnv) {
   }
 
   // Step 3: Pick client
-  const defaultClientChoice = prefs.defaultClient || "claude";
+  const defaultClientChoice = prefs.defaultClient || lastUsed?.client || "claude";
   const clientCmd = (env.clientCmd || (await selectClientInteractive(clientStatus, defaultClientChoice))) as ClientName | "server";
 
   // Step 4: Ensure client is ready / installed
@@ -154,6 +206,14 @@ export async function runInteractiveWizard(env: PontisEnv) {
   });
   updateLastUsed(clientCmd, provider, model);
 
+  process.env.PONTIS_PROVIDER = provider;
+  process.env.PONTIS_MODEL = model;
+  if (upstreamUrl) {
+    process.env.PONTIS_UPSTREAM_URL = upstreamUrl;
+  } else {
+    delete process.env.PONTIS_UPSTREAM_URL;
+  }
+
   // Step 5: Start proxy & launch
   await launchProxyAndClient(clientCmd, model, apiKey, provider, upstreamUrl, []);
 }
@@ -165,8 +225,9 @@ export async function runWithConfig(
   clientCmd: string,
   opts: Record<string, any>,
   extraArgs: string[],
+  skipSplash = false,
 ) {
-  splash();
+  if (!skipSplash) splash();
 
   const prefs = getPreferences();
   const openCodeKey = getOpenCodeApiKey();
@@ -183,7 +244,7 @@ export async function runWithConfig(
   let upstreamUrl =
     opts.upstream ||
     process.env.PONTIS_UPSTREAM_URL ||
-    (provider === "local" ? (prefs.localEndpoint || "http://localhost:11434/v1") : undefined);
+    (provider === "google" ? GOOGLE_DEFAULT_UPSTREAM : (provider === "local" ? (prefs.localEndpoint || "http://localhost:11434/v1") : undefined));
 
   if (!upstreamUrl && provider === "cloudflare") {
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || savedCf.accountId;
@@ -199,6 +260,13 @@ export async function runWithConfig(
   let apiKey = opts.apiKey;
   if (!apiKey) {
     switch (provider) {
+      case "google": {
+        apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || getGoogleAuthToken() || undefined;
+        if (!apiKey) {
+          apiKey = await getGoogleApiKeyInteractive();
+        }
+        break;
+      }
       case "opencode": {
         apiKey = process.env.OPENCODE_API_KEY || openCodeKey || undefined;
         if (!apiKey) {
@@ -238,6 +306,7 @@ export async function runWithConfig(
     pi: "Pi",
     opencode: "OpenCode",
     claude: "Claude Code",
+    hermes: "Hermes Agent",
   };
 
   // Ensure client is installed before launching
@@ -246,7 +315,15 @@ export async function runWithConfig(
     const ready = await ensureClientReady(clientCmd as ClientName, autoInstall);
     if (!ready) {
       const modeLabel = MODE_LABELS[clientCmd] || "Claude Code";
-      error(`${modeLabel} is required to continue. Install it or pass --no-install to skip this check.`);
+      if (autoInstall) {
+        error(
+          `${modeLabel} is required to continue, but automatic installation did not complete. Install it with: pontis install ${clientCmd}`,
+        );
+      } else {
+        error(
+          `${modeLabel} is not installed and --no-install was given. Install it with: pontis install ${clientCmd}`,
+        );
+      }
     }
   }
 
@@ -271,6 +348,7 @@ async function launchProxyAndClient(
     pi: "Pi",
     opencode: "OpenCode",
     claude: "Claude Code",
+    hermes: "Hermes Agent",
   };
   const modeLabel = MODE_LABELS[clientCmd] || "Claude Code";
 
@@ -278,32 +356,45 @@ async function launchProxyAndClient(
   kv("Provider", getProviderDisplayName(provider));
   kv("Model", t.primary(model));
   if (upstreamUrl) kv("Upstream", t.muted(upstreamUrl));
-  console.log();
+
+  // Set environment for proxy and client processes
+  process.env.PONTIS_PROVIDER = provider;
+  process.env.PONTIS_MODEL = model;
+  if (upstreamUrl) {
+    process.env.PONTIS_UPSTREAM_URL = upstreamUrl;
+  } else {
+    delete process.env.PONTIS_UPSTREAM_URL;
+  }
 
   try {
-    await startProxy(model, false);
+    const proxyInfo = await startProxy(model, false);
+    let proxyUrl = proxyInfo.proxyUrl;
 
     // Client-specific provider wiring
     switch (clientCmd) {
       case "pi":
-        setupPiProvider(apiKey, model);
+        setupPiProvider(apiKey, model, proxyUrl);
         badge("muted", "Configured Pi provider in ~/.pi/agent/models.json");
         break;
       case "opencode":
-        setupOpenCodeProvider(apiKey);
+        setupOpenCodeProvider(apiKey, proxyUrl);
         badge("muted", "Configured OpenCode proxy auth in ~/.local/share/opencode/auth.json");
         break;
       case "codex":
-        setupCodexProvider();
+        setupCodexProvider(proxyUrl);
         badge("muted", "Configured Codex profile in ~/.codex/pontis.config.toml");
         break;
     }
 
     // Fast connectivity verification
-    let ok = await testConnectivity(apiKey, model, provider);
+    let ok = await testConnectivity(apiKey, model, provider, proxyUrl);
     while (!ok && process.stdin.isTTY) {
       const recovered = await promptRecovery(provider, apiKey, model, upstreamUrl);
       if (!recovered) break;
+      if (recovered.proceedAnyway) {
+        ok = true;
+        break;
+      }
 
       provider = recovered.provider;
       model = recovered.model;
@@ -327,24 +418,26 @@ async function launchProxyAndClient(
       });
       updateLastUsed(clientCmd as ClientName | "server", provider, model);
 
+      // Restart proxy with the new model & configuration
+      const updatedProxy = await startProxy(model, false);
+      proxyUrl = updatedProxy.proxyUrl;
+
       // Client-specific provider re-wiring
       switch (clientCmd) {
         case "pi":
-          setupPiProvider(apiKey, model);
+          setupPiProvider(apiKey, model, proxyUrl);
           badge("muted", "Updated Pi provider in ~/.pi/agent/models.json");
           break;
         case "opencode":
-          setupOpenCodeProvider(apiKey);
+          setupOpenCodeProvider(apiKey, proxyUrl);
           badge("muted", "Updated OpenCode proxy auth");
           break;
         case "codex":
-          setupCodexProvider();
+          setupCodexProvider(proxyUrl);
           break;
       }
 
-      // Restart proxy with the new model & configuration
-      await startProxy(model, false);
-      ok = await testConnectivity(apiKey, model, provider);
+      ok = await testConnectivity(apiKey, model, provider, proxyUrl);
     }
 
     if (!ok) {
@@ -352,7 +445,7 @@ async function launchProxyAndClient(
     }
 
     // Launch client process
-    await launchClient(clientCmd, model, apiKey, extraArgs);
+    await launchClient(clientCmd, model, apiKey, extraArgs, proxyUrl);
   } finally {
     switch (clientCmd) {
       case "pi":
@@ -376,6 +469,7 @@ export interface RecoveryResult {
   model: string;
   apiKey: string;
   upstreamUrl?: string;
+  proceedAnyway?: boolean;
 }
 
 /**
@@ -388,14 +482,24 @@ async function promptRecovery(
   failedModel: string,
   upstreamUrl?: string,
 ): Promise<RecoveryResult | null> {
-  console.log(`\n  ${t.bold("Auto-Recovery")}`);
-  console.log(`  ${t.muted("How would you like to resolve this connection issue?")}\n`);
+  section("Auto-Recovery");
+  console.log(`  ${t.muted("How would you like to resolve this connection issue?")}`);
 
   let availableModels: string[] = [];
-  if (provider === "opencode") {
+  if (provider === "google") {
+    const spin = createSpinner("Fetching live available models from Google AI...");
+    try {
+      availableModels = await fetchGoogleModels(apiKey);
+    } catch {}
+    spin.stop(
+      availableModels.length > 0
+        ? { type: "success", text: `${availableModels.length} Google models available` }
+        : { type: "warning", text: "Using default Gemini model list" },
+    );
+  } else if (provider === "opencode") {
     const spin = createSpinner("Fetching live available models from OpenCode...");
     try {
-      availableModels = await fetchWorkingOpenCodeModels(apiKey);
+      availableModels = await fetchWorkingOpenCodeModels(apiKey, true);
     } catch {}
     spin.stop(
       availableModels.length > 0
@@ -438,7 +542,8 @@ async function promptRecovery(
 
   const choices = [
     ...availableModels,
-    `${t.primary("⚙  Switch Provider (Cloudflare, OpenCode, Local)")}`,
+    `${t.accent(`▶  Proceed anyway with "${failedModel}" (skip verification)`)}`,
+    `${t.primary("⚙  Switch Provider (Google, Cloudflare, OpenCode, Local)")}`,
     `${t.muted("Cancel / Exit")}`,
   ];
 
@@ -451,7 +556,7 @@ async function promptRecovery(
   if (choice.index === -1) {
     const customModel = choice.value.trim();
     if (!customModel) return null;
-    return { provider, model: customModel, apiKey };
+    return { provider, model: customModel, apiKey, upstreamUrl };
   }
 
   // Cancel / Exit
@@ -469,6 +574,14 @@ async function promptRecovery(
     let newUpstreamUrl: string | undefined;
 
     switch (newProvider) {
+      case "google": {
+        section("Google (Gemini) Setup");
+        const g = await setupGoogleInteractive();
+        newModel = g.model;
+        newApiKey = g.apiKey;
+        newUpstreamUrl = g.upstreamUrl;
+        break;
+      }
       case "local": {
         section("Local AI Setup");
         const local = await setupLocalInteractive();
@@ -502,10 +615,22 @@ async function promptRecovery(
     };
   }
 
+  // Proceed anyway option
+  if (choice.index === choices.length - 3) {
+    return {
+      provider,
+      model: failedModel,
+      apiKey,
+      upstreamUrl,
+      proceedAnyway: true,
+    };
+  }
+
   // Selected a model from the list
   return {
     provider,
     model: choice.value,
     apiKey,
+    upstreamUrl,
   };
 }

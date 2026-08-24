@@ -1,13 +1,3 @@
-/**
- * Install Engine — install client coding agents on the fly
- * using their official install methods.
- *
- * Philosophy:
- *   - If the binary is already on PATH → use it (honor existing installs).
- *   - If missing → run the tool's official installer (curl | sh, npm, etc.).
- *   - Never install a duplicate copy if one already exists.
- */
-
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -15,36 +5,61 @@ import { homedir } from "node:os";
 import { badge, confirm, createSpinner, section, kv, t, outputJson, select } from "./ui";
 import { getPreferences, savePreferences } from "./preferences";
 
-// ──────────────────────────────────────────────
-//  Types
-// ──────────────────────────────────────────────
+export type ClientName = "claude" | "codex" | "opencode" | "pi" | "hermes";
 
-export type ClientName = "claude" | "codex" | "opencode" | "pi";
-
-export interface ClientDef {
-  /** Display name (e.g. "Claude Code") */
-  name: string;
-  /** Short description */
-  description: string;
-  /** Binary name on PATH (e.g. "claude") */
-  binary: string;
-  /** Official curl-pipe installer URL, or null for npm-only tools */
-  installScript: string | null;
-  /** npm package name (used when installScript is null) */
-  npmPackage?: string;
-  /** Minimum Node.js version required, or null if native binary */
-  minNodeVersion: string | null;
-  /** Human-friendly install hint for error messages */
-  installHint: string;
-  /** Package name shown in prompts */
-  packageLabel: string;
-  /** Env var the installer respects for custom install dir (if any) */
-  installDirEnv?: string;
+export function normalizeClientName(name: string): ClientName | null {
+  const lower = name.toLowerCase().trim();
+  if (lower === "claude") return "claude";
+  if (lower === "codex") return "codex";
+  if (lower === "opencode") return "opencode";
+  if (lower === "pi") return "pi";
+  if (lower === "hermes") return "hermes";
+  return null;
 }
 
-// ──────────────────────────────────────────────
-//  Client registry
-// ──────────────────────────────────────────────
+/** Levenshtein distance, for "did you mean" suggestions. */
+function editDistance(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[] = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+
+/** Suggest the closest valid client name for a mistyped value, or null. */
+export function closestClientName(value: string): string | null {
+  const lower = value.toLowerCase().trim();
+  const names = Object.keys(CLIENTS);
+  let best: string | null = null;
+  let bestDist = Infinity;
+  for (const n of names) {
+    const d = editDistance(lower, n);
+    if (d < bestDist) {
+      bestDist = d;
+      best = n;
+    }
+  }
+  return bestDist <= 2 || (best !== null && best.startsWith(lower.slice(0, 3))) ? best : null;
+}
+
+export interface ClientDef {
+  name: string;
+  description: string;
+  binary: string;
+  installScript: string | null;
+  npmPackage?: string;
+  minNodeVersion: string | null;
+  installHint: string;
+  packageLabel: string;
+  installDirEnv?: string;
+}
 
 export const CLIENTS: Record<ClientName, ClientDef> = {
   claude: {
@@ -52,7 +67,7 @@ export const CLIENTS: Record<ClientName, ClientDef> = {
     description: "Anthropic's official AI coding assistant",
     binary: "claude",
     installScript: "https://claude.ai/install.sh",
-    minNodeVersion: null, // ships native binary via the installer
+    minNodeVersion: null,
     installHint: "curl -fsSL https://claude.ai/install.sh | bash",
     packageLabel: "@anthropic-ai/claude-code",
   },
@@ -64,6 +79,15 @@ export const CLIENTS: Record<ClientName, ClientDef> = {
     minNodeVersion: null,
     installHint: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
     packageLabel: "@openai/codex",
+  },
+  hermes: {
+    name: "Hermes Agent",
+    description: "Autonomous self-improving AI agent by Nous Research",
+    binary: "hermes",
+    installScript: "https://hermes-agent.nousresearch.com/install.sh",
+    minNodeVersion: null,
+    installHint: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+    packageLabel: "hermes-agent",
   },
   opencode: {
     name: "OpenCode",
@@ -79,7 +103,7 @@ export const CLIENTS: Record<ClientName, ClientDef> = {
     name: "Pi",
     description: "The Pi coding agent (pi.dev)",
     binary: "pi",
-    installScript: null, // npm-only
+    installScript: null,
     npmPackage: "@earendil-works/pi-coding-agent",
     minNodeVersion: "22.19",
     installHint: "npm install -g @earendil-works/pi-coding-agent",
@@ -87,42 +111,43 @@ export const CLIENTS: Record<ClientName, ClientDef> = {
   },
 };
 
-/** All client names */
-export const ALL_CLIENTS: ClientName[] = ["claude", "codex", "opencode", "pi"];
+export const ALL_CLIENTS: ClientName[] = ["claude", "codex", "hermes", "opencode", "pi"];
 
-/** Names that have a bash install script (vs npm-only) */
 export const CLIENTS_WITH_INSTALL_SCRIPT: ClientName[] = [
   "claude",
   "codex",
+  "hermes",
   "opencode",
 ];
 
-// ──────────────────────────────────────────────
-//  Detection & Resolution
-// ──────────────────────────────────────────────
-
-/**
- * Resolve a client binary path. Checks PATH first, then
- * falls back to ~/.pontis/clients/<name>/bin/<binary> for
- * Pontis-managed installations.
- */
 export function resolveClientBinary(name: ClientName): string {
-  try {
-    const resolved = execSync(`which "${name}" 2>/dev/null || command -v "${name}" 2>/dev/null`, {
-      encoding: "utf-8",
-    }).trim();
-    if (resolved) return resolved;
-  } catch {
-    // not found on PATH
+  const def = CLIENTS[name];
+  const binaryCandidates = def?.binary && def.binary !== name ? [def.binary, name] : [def?.binary || name];
+
+  for (const bin of binaryCandidates) {
+    try {
+      const resolved = execSync(`which "${bin}" 2>/dev/null || command -v "${bin}" 2>/dev/null`, {
+        encoding: "utf-8",
+      }).trim();
+      if (resolved && existsSync(resolved)) return resolved;
+    } catch {}
+
+    const commonPaths = [
+      join(homedir(), ".local", "bin", bin),
+      join(homedir(), ".cargo", "bin", bin),
+      join(homedir(), "bin", bin),
+      join("/usr", "local", "bin", bin),
+      join("/opt", "homebrew", "bin", bin),
+      join(homedir(), ".pontis", "clients", name, "bin", bin),
+      join(homedir(), ".pontis", "clients", name, "node_modules", ".bin", bin),
+    ];
+
+    for (const p of commonPaths) {
+      if (existsSync(p)) return p;
+    }
   }
-  // Fallback: Pontis-managed install under ~/.pontis/clients
-  const local = join(homedir(), ".pontis", "clients", name, "bin", name);
-  if (existsSync(local)) return local;
-  // npm --prefix layout: node_modules/.bin/
-  const npmBin = join(homedir(), ".pontis", "clients", name, "node_modules", ".bin", name);
-  if (existsSync(npmBin)) return npmBin;
-  // Last resort: trust the shell to find it
-  return name;
+
+  return def?.binary || name;
 }
 
 /**
@@ -163,8 +188,7 @@ export function getClientVersion(name: ClientName): string | null {
 }
 
 /**
- * Check if a binary is available on PATH.
- * Uses `which` (Unix) or `where` (Windows).
+ * Check if a binary is available on PATH or common tool install directories.
  */
 export function binaryOnPath(binary: string): boolean {
   try {
@@ -172,9 +196,17 @@ export function binaryOnPath(binary: string): boolean {
       stdio: "ignore",
     });
     return true;
-  } catch {
-    return false;
-  }
+  } catch {}
+
+  const commonPaths = [
+    join(homedir(), ".local", "bin", binary),
+    join(homedir(), ".cargo", "bin", binary),
+    join(homedir(), "bin", binary),
+    join("/usr", "local", "bin", binary),
+    join("/opt", "homebrew", "bin", binary),
+  ];
+
+  return commonPaths.some((p) => existsSync(p));
 }
 
 /**
@@ -182,6 +214,7 @@ export function binaryOnPath(binary: string): boolean {
  */
 export function isInstalled(name: ClientName): boolean {
   const def = CLIENTS[name];
+  if (!def) return false;
   // For Pi, also check Node version
   if (name === "pi" && def.minNodeVersion) {
     const [major, minor] = process.versions.node.split(".").map(Number);
@@ -190,7 +223,11 @@ export function isInstalled(name: ClientName): boolean {
       return false;
     }
   }
-  return binaryOnPath(def.binary) || existsSync(join(homedir(), ".pontis", "clients", name, "bin", def.binary)) || existsSync(join(homedir(), ".pontis", "clients", name, "node_modules", ".bin", def.binary));
+  return (
+    binaryOnPath(def.binary) ||
+    existsSync(join(homedir(), ".pontis", "clients", name, "bin", def.binary)) ||
+    existsSync(join(homedir(), ".pontis", "clients", name, "node_modules", ".bin", def.binary))
+  );
 }
 
 /**
@@ -433,8 +470,13 @@ export async function ensureClientInstalled(
     await installClient(name, { interactive: options?.interactive });
     return isInstalled(name);
   } catch (e: any) {
-    if (e instanceof InstallError && e.hint) {
-      badge("muted", e.hint);
+    // Surface the real cause (DNS failure, EACCES, missing curl…) before the
+    // manual-install hint — the hint alone doesn't tell the user what failed.
+    if (e instanceof InstallError) {
+      if (e.message) badge("error", e.message);
+      if (e.hint) badge("muted", e.hint);
+    } else if (e?.message) {
+      badge("error", String(e.message));
     }
     return false;
   }
@@ -504,14 +546,15 @@ export function cmdClientsList(opts?: { json?: boolean }): void {
  * Set the default client to launch with `pontis`.
  */
 export function cmdClientsDefault(clientName: string): void {
-  const normalized = clientName.toLowerCase().trim() as ClientName | "server";
-  if (normalized !== "server" && !ALL_CLIENTS.includes(normalized as ClientName)) {
+  const normalized = clientName.toLowerCase().trim();
+  const validClient = normalized === "server" ? "server" : normalizeClientName(normalized);
+  if (!validClient) {
     badge("error", `Unknown client "${clientName}". Valid: ${ALL_CLIENTS.join(", ")}, server`);
     process.exit(1);
   }
 
-  savePreferences({ defaultClient: normalized });
-  const displayName = normalized === "server" ? "Server Mode" : CLIENTS[normalized as ClientName]?.name;
+  savePreferences({ defaultClient: validClient });
+  const displayName = validClient === "server" ? "Server Mode" : CLIENTS[validClient]?.name;
   badge("success", `Default client set to ${t.primary(displayName)}`);
 }
 

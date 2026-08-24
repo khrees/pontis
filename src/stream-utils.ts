@@ -1,58 +1,28 @@
 import { getMaxBufferBytes, getChunkSizeBytes } from './env';
 
-/**
- * Streaming utilities for optimized encoder/decoder reuse and buffer management.
- * Reduces memory allocation overhead in streaming operations.
- */
-
-// TextEncoder and TextDecoder instances for reuse
 let textEncoder: TextEncoder | null = null;
 let textDecoder: TextDecoder | null = null;
 
-/**
- * Get a reusable TextEncoder instance.
- * Creates one on first call and reuses it for subsequent calls.
- */
 export function getTextEncoder(): TextEncoder {
-  if (!textEncoder) {
-    textEncoder = new TextEncoder();
-  }
+  if (!textEncoder) textEncoder = new TextEncoder();
   return textEncoder;
 }
 
-/**
- * Get a reusable TextDecoder instance.
- * Creates one on first call and reuses it for subsequent calls.
- */
 export function getTextDecoder(): TextDecoder {
-  if (!textDecoder) {
-    textDecoder = new TextDecoder();
-  }
+  if (!textDecoder) textDecoder = new TextDecoder();
   return textDecoder;
 }
 
-/**
- * Reset the decoder state (useful when processing independent streams).
- * This prevents carryover between different streaming operations.
- */
 export function resetTextDecoder(): void {
-  if (textDecoder) {
-    textDecoder = new TextDecoder(); // Create fresh instance
-  }
+  if (textDecoder) textDecoder = new TextDecoder();
 }
 
-/**
- * Stream buffer configuration
- */
 export interface StreamBufferConfig {
-  maxSize: number;        // Maximum buffer size in bytes
-  chunkSize: number;      // Preferred chunk size for processing
-  watermark: number;      // High watermark for proactive processing
+  maxSize: number;
+  chunkSize: number;
+  watermark: number;
 }
 
-/**
- * Default buffer configuration optimized for typical AI streaming scenarios
- */
 export function getDefaultBufferConfig(): StreamBufferConfig {
   const maxSize = getMaxBufferBytes(5 * 1024 * 1024);
   const chunkSize = getChunkSizeBytes(64 * 1024);
@@ -62,58 +32,36 @@ export function getDefaultBufferConfig(): StreamBufferConfig {
 
 export const DEFAULT_BUFFER_CONFIG: StreamBufferConfig = getDefaultBufferConfig();
 
-/**
- * Stream buffer manager for efficient memory usage
- */
 export class StreamBufferManager {
-  private buffer: string = '';
+  private buffer = '';
   public readonly config: StreamBufferConfig;
-  private processedChunks: number = 0;
+  private processedChunks = 0;
 
   constructor(config: StreamBufferConfig = DEFAULT_BUFFER_CONFIG) {
     this.config = config;
   }
 
-  /**
-   * Add data to the buffer
-   */
   addChunk(chunk: string): void {
     this.buffer += chunk;
     this.processedChunks++;
   }
 
-  /**
-   * Check if buffer exceeds maximum size
-   */
   isOverflow(): boolean {
     return this.buffer.length > this.config.maxSize;
   }
 
-  /**
-   * Check if buffer exceeds high watermark
-   */
   isHighWatermark(): boolean {
     return this.buffer.length > this.config.watermark;
   }
 
-  /**
-   * Get current buffer size
-   */
   getSize(): number {
     return this.buffer.length;
   }
 
-  /**
-   * Get processed chunk count
-   */
   getProcessedCount(): number {
     return this.processedChunks;
   }
 
-  /**
-   * Split buffer by delimiter and return parts
-   * Returns array of complete messages and remaining buffer
-   */
   splitByDelimiter(delimiter: string): { parts: string[]; remaining: string } {
     const parts = this.buffer.split(delimiter);
     const remaining = parts.pop() || '';
@@ -121,34 +69,22 @@ export class StreamBufferManager {
     return { parts, remaining };
   }
 
-  /**
-   * Get and clear buffer
-   */
   drain(): string {
     const data = this.buffer;
     this.buffer = '';
     return data;
   }
 
-  /**
-   * Clear buffer
-   */
   clear(): void {
     this.buffer = '';
     this.processedChunks = 0;
   }
 
-  /**
-   * Get current buffer content without clearing
-   */
   peek(): string {
     return this.buffer;
   }
 }
 
-/**
- * Optimized SSE event processor with reusable components
- */
 export class SSEEventProcessor {
   private decoder: TextDecoder;
   private bufferManager: StreamBufferManager;
@@ -158,74 +94,49 @@ export class SSEEventProcessor {
     this.bufferManager = new StreamBufferManager(config);
   }
 
-  /**
-   * Process a raw chunk from the stream
-   */
   async processChunk(
     chunk: Uint8Array,
     eventHandler: (event: string, data: string) => void
   ): Promise<void> {
-    // Decode chunk using reusable decoder
     const text = this.decoder.decode(chunk, { stream: true });
-    
-    // Add to buffer
     this.bufferManager.addChunk(text);
 
-    // Check for overflow
     if (this.bufferManager.isOverflow()) {
       throw new Error(
         `Stream buffer overflow: ${this.bufferManager.getSize()} > ${this.bufferManager.config.maxSize}`
       );
     }
 
-    // Process complete SSE events
     const { parts } = this.bufferManager.splitByDelimiter('\n\n');
-    
     for (const part of parts) {
       if (!part.trim()) continue;
-      
-      const lines = part.split('\n');
-      for (const line of lines) {
+      for (const line of part.split('\n')) {
         if (!line.startsWith('data: ')) continue;
-        
         const data = line.slice(6).trim();
         if (!data || data === '[DONE]') continue;
-        
         eventHandler('data', data);
       }
     }
   }
 
-  /**
-   * Finalize processing (handle remaining buffer)
-   */
   finalize(eventHandler: (event: string, data: string) => void): void {
     const remaining = this.bufferManager.peek();
     if (remaining.trim()) {
-      const lines = remaining.split('\n');
-      for (const line of lines) {
+      for (const line of remaining.split('\n')) {
         if (!line.startsWith('data: ')) continue;
-        
         const data = line.slice(6).trim();
         if (!data || data === '[DONE]') continue;
-        
         eventHandler('data', data);
       }
     }
   }
 
-  /**
-   * Reset the processor for a new stream
-   */
   reset(): void {
     this.bufferManager.clear();
     resetTextDecoder();
     this.decoder = getTextDecoder();
   }
 
-  /**
-   * Get buffer statistics
-   */
   getStats() {
     return {
       bufferSize: this.bufferManager.getSize(),
@@ -235,9 +146,6 @@ export class SSEEventProcessor {
   }
 }
 
-/**
- * Factory function to create an optimized SSE stream transformer
- */
 export function createSSETransformer(
   eventHandler: (event: string, data: string) => void,
   config?: StreamBufferConfig
@@ -267,9 +175,6 @@ export function createSSETransformer(
   });
 }
 
-/**
- * Utility to enqueue SSE data with reusable encoder
- */
 export function enqueueSSE(
   controller: ReadableStreamDefaultController<Uint8Array>,
   eventType: string,
@@ -277,60 +182,37 @@ export function enqueueSSE(
 ): void {
   const encoder = getTextEncoder();
   const payload = typeof data === 'string' ? data : JSON.stringify(data);
-  const message = `event: ${eventType}\ndata: ${payload}\n\n`;
-  controller.enqueue(encoder.encode(message));
+  controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${payload}\n\n`));
 }
 
-/**
- * Configuration presets for different streaming scenarios
- */
 export const STREAM_PRESETS = {
-  // Low latency for real-time chat
   lowLatency: {
-    maxSize: 2 * 1024 * 1024,   // 2MB
-    chunkSize: 16 * 1024,       // 16KB
-    watermark: 1.5 * 1024 * 1024, // 1.5MB
+    maxSize: 2 * 1024 * 1024,
+    chunkSize: 16 * 1024,
+    watermark: 1.5 * 1024 * 1024,
   } as StreamBufferConfig,
 
-  // Balanced for typical AI responses
   balanced: DEFAULT_BUFFER_CONFIG,
 
-  // High throughput for large responses
   highThroughput: {
-    maxSize: 10 * 1024 * 1024,  // 10MB
-    chunkSize: 128 * 1024,      // 128KB
-    watermark: 8 * 1024 * 1024, // 8MB
+    maxSize: 10 * 1024 * 1024,
+    chunkSize: 128 * 1024,
+    watermark: 8 * 1024 * 1024,
   } as StreamBufferConfig,
 
-  // Memory constrained environments
   memoryConstrained: {
-    maxSize: 1 * 1024 * 1024,   // 1MB
-    chunkSize: 8 * 1024,        // 8KB
-    watermark: 512 * 1024,      // 512KB
+    maxSize: 1 * 1024 * 1024,
+    chunkSize: 8 * 1024,
+    watermark: 512 * 1024,
   } as StreamBufferConfig,
 };
 
-/**
- * Get appropriate buffer configuration based on environment
- */
 export function getOptimalBufferConfig(): StreamBufferConfig {
-  // Check if we're in a memory-constrained environment
   if (typeof process !== 'undefined' && process.env) {
     const env = process.env;
-    
-    if (env.PONTIS_LOW_MEMORY === 'true') {
-      return STREAM_PRESETS.memoryConstrained;
-    }
-    
-    if (env.PONTIS_HIGH_THROUGHPUT === 'true') {
-      return STREAM_PRESETS.highThroughput;
-    }
-    
-    if (env.PONTIS_LOW_LATENCY === 'true') {
-      return STREAM_PRESETS.lowLatency;
-    }
+    if (env.PONTIS_LOW_MEMORY === 'true') return STREAM_PRESETS.memoryConstrained;
+    if (env.PONTIS_HIGH_THROUGHPUT === 'true') return STREAM_PRESETS.highThroughput;
+    if (env.PONTIS_LOW_LATENCY === 'true') return STREAM_PRESETS.lowLatency;
   }
-
-  // Default to balanced configuration
   return STREAM_PRESETS.balanced;
 }

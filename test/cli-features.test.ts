@@ -3,7 +3,7 @@ import { getAllClientsInfo, getClientInfo, ALL_CLIENTS } from "../src/cli/instal
 import { getAuthStatus } from "../src/cli/auth";
 import { clearAllCredentials, storeOpenCodeApiKey } from "../src/secure-storage";
 import { testConnectivity } from "../src/cli/client-launcher";
-import { isFreeOpenCodeModel } from "../src/opencode-models";
+import { isFreeOpenCodeModel, registerFreeOpenCodeModel } from "../src/opencode-models";
 import {
   getDefaultModelForProvider,
   getProviderDisplayName,
@@ -132,6 +132,26 @@ describe("Free-tier model detection (isFreeOpenCodeModel)", () => {
     expect(isFreeOpenCodeModel("qwen3.7-plus")).toBe(false);
     expect(isFreeOpenCodeModel("@cf/meta/llama-3.3-70b")).toBe(false);
   });
+
+  it("identifies free models using naming patterns beyond -free suffix", () => {
+    expect(isFreeOpenCodeModel("custom_free")).toBe(true);
+    expect(isFreeOpenCodeModel("model:free")).toBe(true);
+    expect(isFreeOpenCodeModel("model-free-preview")).toBe(true);
+  });
+
+  it("identifies free models using model object metadata", () => {
+    expect(isFreeOpenCodeModel("unprefixed-model", { free: true })).toBe(true);
+    expect(isFreeOpenCodeModel("zero-cost-model", { pricing: { input: 0, output: 0 } })).toBe(true);
+    expect(isFreeOpenCodeModel("zen-model", { owned_by: "zen" })).toBe(true);
+    expect(isFreeOpenCodeModel("tagged-model", { tags: ["free", "fast"] })).toBe(true);
+    expect(isFreeOpenCodeModel("paid-model", { free: false, pricing: { input: 1 } })).toBe(false);
+  });
+
+  it("supports dynamic registration of verified free models", () => {
+    expect(isFreeOpenCodeModel("newly-discovered-zen-model")).toBe(false);
+    registerFreeOpenCodeModel("newly-discovered-zen-model");
+    expect(isFreeOpenCodeModel("newly-discovered-zen-model")).toBe(true);
+  });
 });
 
 describe("Provider & Model Resolution (resolveProviderAndModel)", () => {
@@ -236,5 +256,19 @@ describe("Provider & Model Resolution (resolveProviderAndModel)", () => {
     expect(getProviderDisplayName("cloudflare")).toBe("Cloudflare AI Gateway");
     expect(getProviderDisplayName("local")).toBe("Local");
     expect(getProviderDisplayName("opencode")).toBe("OpenCode");
+  });
+});
+
+describe("Multi-instance Port Allocation (findAvailablePort & isPortAvailable)", () => {
+  it("detects available ports correctly", async () => {
+    const { isPortAvailable } = await import("../src/cli/proxy-manager");
+    const available = await isPortAvailable(0); // Port 0 asks the OS for an available ephemeral port
+    expect(available).toBe(true);
+  });
+
+  it("finds next free port when starting port is tested", async () => {
+    const { findAvailablePort } = await import("../src/cli/proxy-manager");
+    const port = await findAvailablePort(18787);
+    expect(port).toBeGreaterThanOrEqual(18787);
   });
 });

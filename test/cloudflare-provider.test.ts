@@ -1,30 +1,47 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fetchCloudflareModels, setupCloudflareInteractive } from '../src/cli/provider-cloudflare';
-import * as ui from '../src/cli/ui';
 
-// Mock the UI module
+// Mock the ui module BEFORE importing the provider functions
 vi.mock('../src/cli/ui', () => ({
-  select: vi.fn(),
   input: vi.fn(),
   confirm: vi.fn(),
-  createSpinner: vi.fn(() => ({ stop: vi.fn() })),
+  select: vi.fn(),
+  inputRequired: vi.fn(),
+  createSpinner: vi.fn(() => ({
+    stop: vi.fn(),
+    update: vi.fn(),
+  })),
   badge: vi.fn(),
+  t: {
+    primary: (s: string) => s,
+    secondary: (s: string) => s,
+    success: (s: string) => s,
+    warning: (s: string) => s,
+    error: (s: string) => s,
+    muted: (s: string) => s,
+    dim: (s: string) => s,
+    bold: (s: string) => s,
+    accent: (s: string) => s,
+  },
+  SYM: {},
   section: vi.fn(),
+  splash: vi.fn(),
   error: vi.fn(),
+  kv: vi.fn(),
+  jsonMode: false,
+  outputJson: vi.fn(),
+  outputJsonError: vi.fn(),
+  warn: vi.fn(),
 }));
 
-// Prevent saved config from short-circuiting interactive prompts
-vi.mock('../src/cli/config', async () => {
-  const actual = await vi.importActual('../src/cli/config');
-  return {
-    ...actual,
-    getCloudflareConfigSaved: () => ({} as Record<string, string>),
-  };
-});
+import { fetchCloudflareModels, setupCloudflareInteractive } from '../src/cli/provider-cloudflare';
+import * as ui from '../src/cli/ui';
+import * as config from '../src/cli/config';
 
 describe('Cloudflare Provider', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
+    vi.spyOn(config, 'getCloudflareConfigSaved').mockReturnValue({} as any);
   });
 
   afterEach(() => {
@@ -40,7 +57,7 @@ describe('Cloudflare Provider', () => {
         { id: 'invalid-model-id' }, // Should be filtered out
       ];
 
-      global.fetch = vi.fn().mockResolvedValue({
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
         ok: true,
         json: async () => ({
           success: true,
@@ -58,7 +75,7 @@ describe('Cloudflare Provider', () => {
     });
 
     it('should handle API errors gracefully', async () => {
-      global.fetch = vi.fn().mockResolvedValue({
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
         ok: false,
       } as Response);
 
@@ -68,7 +85,7 @@ describe('Cloudflare Provider', () => {
     });
 
     it('should handle timeout errors', async () => {
-      global.fetch = vi.fn().mockRejectedValue(new Error('Timeout'));
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Timeout'));
 
       const models = await fetchCloudflareModels('test-account', 'test-token');
 
@@ -76,7 +93,7 @@ describe('Cloudflare Provider', () => {
     });
 
     it('should handle malformed API responses', async () => {
-      global.fetch = vi.fn().mockResolvedValue({
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
         ok: true,
         json: async () => ({
           success: false,
@@ -90,7 +107,7 @@ describe('Cloudflare Provider', () => {
     });
 
     it('should handle network errors', async () => {
-      global.fetch = vi.fn().mockRejectedValue(new Error('Network error'));
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network error'));
 
       const models = await fetchCloudflareModels('test-account', 'test-token');
 
@@ -105,16 +122,15 @@ describe('Cloudflare Provider', () => {
     });
 
     it('should successfully set up Cloudflare configuration', async () => {
-      // Setup mock UI responses in call order:
-      // getCloudflareConfigInteractive: input(accountId), input(gatewayId), input(apiToken), confirm(save)
+      // Mock input for account, gateway, token
       vi.mocked(ui.input)
         .mockResolvedValueOnce('test-account')  // Account ID
         .mockResolvedValueOnce('default')         // Gateway ID
         .mockResolvedValueOnce('test-token');     // API Token
+
       vi.mocked(ui.confirm).mockResolvedValueOnce(true);
 
-      // fetchCloudflareModels will use global.fetch
-      global.fetch = vi.fn().mockResolvedValue({
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
         ok: true,
         json: async () => ({
           success: true,
@@ -123,11 +139,9 @@ describe('Cloudflare Provider', () => {
             { id: '@cf/qwen/qwen2.5-7b-instruct' },
           ],
         }),
-      });
+      } as Response);
 
-      // setupCloudflareInteractive: select(model)
-      vi.mocked(ui.select)
-        .mockResolvedValueOnce({ index: 0, value: '@cf/moonshotai/kimi-k2.6' });  // model
+      vi.mocked(ui.select).mockResolvedValueOnce({ index: 0, value: '@cf/moonshotai/kimi-k2.6' });
 
       const result = await setupCloudflareInteractive();
 
@@ -139,18 +153,17 @@ describe('Cloudflare Provider', () => {
     });
 
     it('should prompt for manual model ID when API call fails', async () => {
-      // Setup mock UI responses in call order
       vi.mocked(ui.input)
         .mockResolvedValueOnce('test-account')  // Account ID
         .mockResolvedValueOnce('default')         // Gateway ID
-        .mockResolvedValueOnce('test-token')     // API Token
-        .mockResolvedValueOnce('@cf/moonshotai/kimi-k2.6'); // Manual model ID input
+        .mockResolvedValueOnce('test-token');    // API Token
+
+      vi.mocked(ui.inputRequired).mockResolvedValueOnce('@cf/moonshotai/kimi-k2.6');
       vi.mocked(ui.confirm).mockResolvedValueOnce(true);
 
-      // fetchCloudflareModels returns empty (API call fails)
-      global.fetch = vi.fn().mockResolvedValue({
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
         ok: false,
-      });
+      } as Response);
 
       const result = await setupCloudflareInteractive();
 
@@ -159,27 +172,23 @@ describe('Cloudflare Provider', () => {
     });
 
     it('should handle custom model ID input', async () => {
-      // Setup mock UI responses in call order
       vi.mocked(ui.input)
-        .mockResolvedValueOnce('test-account')  // Account ID
-        .mockResolvedValueOnce('default')         // Gateway ID
-        .mockResolvedValueOnce('test-token');     // API Token
+        .mockResolvedValueOnce('test-account')     // Account ID
+        .mockResolvedValueOnce('default')          // Gateway ID
+        .mockResolvedValueOnce('test-token');      // API Token
+
+      vi.mocked(ui.inputRequired).mockResolvedValueOnce('@cf/custom-model');
       vi.mocked(ui.confirm).mockResolvedValueOnce(true);
 
-      // fetchCloudflareModels returns models
-      global.fetch = vi.fn().mockResolvedValue({
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
         ok: true,
         json: async () => ({
           success: true,
           result: [{ id: '@cf/moonshotai/kimi-k2.6' }],
         }),
-      });
+      } as Response);
 
-      // Select returns "✏️ Enter Custom Model ID" (index 1)
-      vi.mocked(ui.select)
-        .mockResolvedValueOnce({ index: 1, value: '✏️ Enter Custom Model ID' });
-      // Then input is called for custom model ID
-      vi.mocked(ui.input).mockResolvedValueOnce('@cf/custom-model');
+      vi.mocked(ui.select).mockResolvedValueOnce({ index: -1, value: '' });
 
       const result = await setupCloudflareInteractive();
 

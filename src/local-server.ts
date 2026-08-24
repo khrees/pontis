@@ -9,17 +9,20 @@ import { execSync } from "node:child_process";
 import { resolve4 } from "node:dns/promises";
 import app from "./index";
 import { handleWebSocketConnection } from "./handlers/responses-ws";
-import { getPort } from "./env";
+import { getPort, getHost } from "./env";
 
 const port = getPort(8787);
+// Bind to loopback by default so the gateway is not reachable from the
+// network. PONTIS_HOST can override (e.g. 0.0.0.0) for intentional LAN use.
+const host = getHost("127.0.0.1");
+const isLoopback =
+  host === "127.0.0.1" || host === "localhost" || host === "::1";
+// Display "localhost" for the friendly loopback case, the real host otherwise.
+const displayHost = isLoopback ? "localhost" : host;
 
-// ── Real IP of api.openai.com (for forwarding unrecognised requests) ──
-// Resolved before any redirect is in place so we bypass /etc/hosts.
 const REAL_OPENAI_IPS: Promise<string[]> = resolve4("api.openai.com").catch(
-  () => ["172.66.0.243", "162.159.140.245"], // well-known fallback
+  () => ["172.66.0.243", "162.159.140.245"],
 );
-
-// ── Certificate generation for TLS (Codex redirect) ──
 
 const PONTIS_DIR = join(homedir(), ".pontis");
 const TLS_CERT = join(PONTIS_DIR, "codex-cert.pem");
@@ -35,7 +38,6 @@ function ensureSelfSignedCert(): { cert: string; key: string } {
 
   mkdirSync(PONTIS_DIR, { recursive: true, mode: 0o700 });
 
-  // Generate a self-signed cert with CN=api.openai.com for Codex redirect
   const subj = "/CN=api.openai.com";
   try {
     execSync(
@@ -53,19 +55,6 @@ function ensureSelfSignedCert(): { cert: string; key: string } {
   };
 }
 
-// ── Proxy forwarder for unrecognised api.openai.com requests ──
-// When Codex traffic is redirected (pf/hosts), requests like login/auth
-// hit the TLS server. If Pontis doesn't handle them, we forward them to
-// the real OpenAI API using the pre-resolved IP (bypassing /etc/hosts).
-
-/**
- * Forward an HTTPS request to the real api.openai.com, using the pre-resolved
- * real IP (to bypass the /etc/hosts redirect) but setting the proper SNI
- * servername so the TLS certificate validates correctly.
- *
- * Uses Node's `https.request` directly because `fetch()` doesn't support
- * custom SNI / servername when connecting to an IP address.
- */
 async function proxyToRealOpenAI(request: Request): Promise<Response> {
   const realIps = await REAL_OPENAI_IPS;
   if (realIps.length === 0) {
@@ -167,12 +156,8 @@ async function proxyToRealOpenAI(request: Request): Promise<Response> {
   });
 }
 
-// ── Server setup ──
-
 console.log(`Starting Pontis on port ${port}...`);
 
-// ── Stale redirect check ──
-// Warn if api.openai.com is still pinned to loopback from a crashed session.
 try {
   const hostsContent = readFileSync("/etc/hosts", "utf-8");
   for (const line of hostsContent.split("\n")) {
@@ -184,26 +169,15 @@ try {
       parts.slice(1).includes("api.openai.com") &&
       (parts[0] === "127.0.0.1" || parts[0] === "0.0.0.0")
     ) {
-      console.warn(
-        "  ⚠  Stale /etc/hosts entry for api.openai.com found!",
-      );
-      console.warn(
-        "     Codex CLI will fail to connect until you remove it.",
-      );
-      console.warn(
-        "     Fix: run →  pontis cleanup-redirect  (or manually remove the line)",
-      );
+      console.warn("  ⚠  Stale /etc/hosts entry for api.openai.com found!");
+      console.warn("     Codex CLI will fail to connect until you remove it.");
+      console.warn("     Fix: run →  pontis cleanup-redirect  (or manually remove the line)");
       break;
     }
   }
-} catch {
-  // Can't read hosts file — skip warning
-}
+} catch {}
 
-// Create the raw HTTP server so we can share it with WebSocket
 const server = createServer(getRequestListener(app.fetch));
-
-// WebSocket upgrade handler
 const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (request, socket, head) => {
@@ -225,15 +199,14 @@ wss.on("connection", (ws: WebSocket) => {
   handleWebSocketConnection(ws, app);
 });
 
-server.listen(port, () => {
-  console.log(`Pontis listening on http://localhost:${port}`);
+server.listen(port, host, () => {
+  console.log(`Pontis listening on http://${displayHost}:${port}`);
+  if (!isLoopback) {
+    console.warn(
+      `  ⚠  Bound to ${host} — the gateway (and your provider quota) is reachable from the network. Unset PONTIS_HOST to bind to localhost.`,
+    );
+  }
 });
-
-// ── Optional TLS server (for Codex wss:// redirect) ──
-// This server handles traffic redirected from api.openai.com:443.
-// Requests Pontis recognises go through the normal Hono app.
-// Unrecognised requests (e.g. codex login/auth) are forwarded to the
-// real OpenAI API using the pre-resolved IP.
 
 const tlsPort = process.env.PONTIS_TLS_PORT
   ? parseInt(process.env.PONTIS_TLS_PORT, 10)
@@ -306,9 +279,9 @@ if (tlsPort) {
       handleWebSocketConnection(ws, app);
     });
 
-    tlsServer.listen(tlsPort, () => {
+    tlsServer.listen(tlsPort, host, () => {
       console.log(
-        `  TLS server on https://localhost:${tlsPort} (for Codex wss:// redirect)`,
+        `  TLS server on https://${displayHost}:${tlsPort} (for Codex wss:// redirect)`,
       );
       console.log(
         `  Cert: ${TLS_CERT} (add to system keychain if needed)`,

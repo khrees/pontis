@@ -2,11 +2,12 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { t, SYM, badge, kv, createSpinner, warn } from "./ui";
+import { t, SYM, badge, kv, createSpinner, warn, section } from "./ui";
 import { redactKey } from "../redact";
 import { PROXY_URL } from "./proxy-manager";
 import { PI_AGENT_DIR, PI_MODELS_FILE, OPENCODE_AUTH_FILE, OPENCODE_DATA_DIR } from "./config";
 import {
+  CLIENTS,
   isInstalled,
   ensureClientInstalled,
   resolveClientBinary,
@@ -45,22 +46,10 @@ export function autoApproveClaudeKey(apiKey: string) {
   } catch {}
 }
 
-// ──────────────────────────────────────────────
-//  Generic install check (delegates to install-engine)
-// ──────────────────────────────────────────────
-
-/**
- * Check if a client binary is on PATH.
- * Lightweight wrapper so existing code doesn't need to change.
- */
 export function clientBinaryExists(name: ClientName): boolean {
   return isInstalled(name);
 }
 
-/**
- * Ensure a client is installed before launching.
- * If missing, prompts to install (unless --no-install).
- */
 export async function ensureClientReady(
   name: ClientName,
   autoInstall?: boolean,
@@ -71,21 +60,12 @@ export async function ensureClientReady(
   });
 }
 
-// ──────────────────────────────────────────────
-//  Pi-specific helpers (unchanged)
-// ──────────────────────────────────────────────
-
 const PI_PROVIDER_NAME = "pontis";
 
-/** Check if the `pi` binary is on PATH. */
 export function piBinaryExists(): boolean {
   return isInstalled("pi");
 }
 
-/**
- * Prompt the user to install Pi if missing. Returns true once installed.
- * Delegates to the generic install engine for consistency.
- */
 export async function ensurePiInstalled(): Promise<boolean> {
   return ensureClientReady("pi", true);
 }
@@ -93,24 +73,14 @@ export async function ensurePiInstalled(): Promise<boolean> {
 export const PI_SETTINGS_FILE = join(PI_AGENT_DIR, "settings.json");
 export const PI_AUTH_FILE = join(PI_AGENT_DIR, "auth.json");
 
-/**
- * Write (or merge into) `~/.pi/agent/models.json` with a custom "pontis"
- * provider that routes through the local Pontis proxy.
- * Includes at least one model definition so Pi's resolver can find the provider
- * and use buildFallbackModel for any additional model IDs the user requests.
- * Also ensures a minimal settings.json exists so Pi doesn't enter first-time setup.
- */
-export function setupPiProvider(apiKey: string, model?: string): void {
+export function setupPiProvider(apiKey: string, model?: string, proxyUrl = PROXY_URL): void {
   mkdirSync(PI_AGENT_DIR, { recursive: true, mode: 0o700 });
 
-  // ── models.json ──
   let existing: Record<string, unknown> = {};
   if (existsSync(PI_MODELS_FILE)) {
     try {
       existing = JSON.parse(readFileSync(PI_MODELS_FILE, "utf-8"));
-    } catch {
-      // Corrupt file — start fresh
-    }
+    } catch {}
   }
 
   const selectedModel = model ?? "default-model";
@@ -119,7 +89,7 @@ export function setupPiProvider(apiKey: string, model?: string): void {
     providers: {
       ...((existing.providers as Record<string, unknown>) || {}),
       [PI_PROVIDER_NAME]: {
-        baseUrl: `${PROXY_URL}/v1`,
+        baseUrl: `${proxyUrl}/v1`,
         apiKey,
         api: "openai-completions",
         models: [
@@ -164,26 +134,19 @@ export function setupPiProvider(apiKey: string, model?: string): void {
 
 const OPENCODE_PROVIDER_ID = "openai";
 
-/**
- * Write an auth entry for OpenCode's `openai` provider pointing at the
- * Pontis proxy. OpenCode reads credentials from ~/.local/share/opencode/auth.json
- * and does NOT respect OPENAI_BASE_URL / OPENAI_API_KEY env vars.
- */
-export function setupOpenCodeProvider(apiKey: string): void {
+export function setupOpenCodeProvider(apiKey: string, proxyUrl = PROXY_URL): void {
   mkdirSync(OPENCODE_DATA_DIR, { recursive: true, mode: 0o700 });
 
   let existing: Record<string, any> = {};
   if (existsSync(OPENCODE_AUTH_FILE)) {
     try {
       existing = JSON.parse(readFileSync(OPENCODE_AUTH_FILE, "utf-8"));
-    } catch {
-      // Corrupt file — start fresh
-    }
+    } catch {}
   }
 
   existing[OPENCODE_PROVIDER_ID] = {
     apiKey,
-    baseUrl: `${PROXY_URL}/v1`,
+    baseUrl: `${proxyUrl}/v1`,
   };
 
   writeFileSync(OPENCODE_AUTH_FILE, JSON.stringify(existing, null, 2), {
@@ -191,10 +154,6 @@ export function setupOpenCodeProvider(apiKey: string): void {
   });
 }
 
-/**
- * Remove the Pontis proxy entry from OpenCode's auth file.
- * Only removes the entry if it points at localhost:8787 (our proxy).
- */
 export function cleanupOpenCodeProvider(): void {
   if (!existsSync(OPENCODE_AUTH_FILE)) return;
 
@@ -203,7 +162,7 @@ export function cleanupOpenCodeProvider(): void {
     const content = JSON.parse(raw);
     const entry = content[OPENCODE_PROVIDER_ID];
 
-    if (entry && typeof entry.baseUrl === "string" && entry.baseUrl.includes("localhost:8787")) {
+    if (entry && typeof entry.baseUrl === "string" && entry.baseUrl.includes("localhost:")) {
       delete content[OPENCODE_PROVIDER_ID];
 
       if (Object.keys(content).length === 0) {
@@ -214,9 +173,7 @@ export function cleanupOpenCodeProvider(): void {
         });
       }
     }
-  } catch {
-    // Leave a corrupt file alone
-  }
+  } catch {}
 }
 
 export function cleanupPiProvider(): void {
@@ -242,40 +199,22 @@ export function cleanupPiProvider(): void {
         });
       }
     }
-  } catch {
-    // Leave a corrupt file alone
-  }
+  } catch {}
 }
-
-// ──────────────────────────────────────────────
-//  Codex provider configuration
-// ──────────────────────────────────────────────
 
 const CODEX_PROVIDER_ID = "pontis";
 
-/**
- * Write a Pontis profile config for Codex at ~/.codex/pontis.config.toml.
- *
- * This follows Ollama's approach: use a dedicated profile file with a
- * [model_providers.<name>] section and `wire_api = "responses"` so Codex
- * sends HTTP requests to the Pontis proxy instead of WebSocket to
- * api.openai.com. No /etc/hosts or pf redirect is needed.
- *
- * Codex uses the profile via: codex --profile pontis
- */
-export function setupCodexProvider(): void {
+export function setupCodexProvider(proxyUrl = PROXY_URL): void {
   const dir = join(homedir(), ".codex");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
-  // Write a separate profile config (like Ollama does with ollama-launch.config.toml)
-  // instead of modifying the main config.toml.
   const profilePath = join(dir, `${CODEX_PROVIDER_ID}.config.toml`);
   const profileContent = `\
 model_provider = "${CODEX_PROVIDER_ID}"
 
 [model_providers.${CODEX_PROVIDER_ID}]
 name = "Pontis Proxy"
-base_url = "http://localhost:8787/v1"
+base_url = "${proxyUrl}/v1"
 wire_api = "responses"
 `;
   writeFileSync(profilePath, profileContent, { mode: 0o600 });
@@ -285,21 +224,15 @@ wire_api = "responses"
  * Remove the Pontis profile config from ~/.codex/.
  */
 export function cleanupCodexProvider(): void {
-  const profilePath = join(homedir(), ".codex", `${CODEX_PROVIDER_ID}.config.toml`);
-  try {
-    if (existsSync(profilePath)) unlinkSync(profilePath);
-  } catch {
-    // Best effort
-  }
+  // Safe no-op to allow multiple concurrent Codex instances without file deletion races
 }
-
-
 
 export function launchClient(
   clientCmd: string,
   model: string,
   apiKey: string,
   extraArgs: string[],
+  proxyUrl = PROXY_URL,
 ): Promise<void> {
   // Section header
   const CLIENT_DISPLAY_NAMES: Record<string, string> = {
@@ -308,17 +241,14 @@ export function launchClient(
     pi: "Pi",
     opencode: "OpenCode",
     claude: "Claude Code",
+    hermes: "Hermes Agent",
   };
   const clientDisplayName = CLIENT_DISPLAY_NAMES[clientCmd] || "Claude Code";
-  console.log(
-    `\n  ${t.primary(SYM.bullet)}  ${t.bold("Launching " + clientDisplayName)}`,
-  );
-  console.log(`  ${t.muted(SYM.separator.repeat(28))}\n`);
+  section("Launching " + clientDisplayName);
 
-  kv("Proxy", t.secondary(PROXY_URL));
+  kv("Proxy", t.secondary(proxyUrl));
   kv("Model", t.primary(model));
   if (extraArgs.length > 0) kv("Args", t.muted(extraArgs.join(" ")));
-  console.log();
 
   if (clientCmd === "server") {
     badge("info", "Proxy is live — connect your clients");
@@ -334,8 +264,7 @@ export function launchClient(
   switch (clientCmd) {
     case "codex":
       // Use dedicated Pontis profile: --profile pontis + proxy base URL
-      // This tells Codex to route through Pontis Responses API at http://localhost:8787/v1
-      childEnv.OPENAI_BASE_URL = `${PROXY_URL}/v1`;
+      childEnv.OPENAI_BASE_URL = `${proxyUrl}/v1`;
       childEnv.OPENAI_API_KEY = apiKey;
       childEnv.PONTIS_API_KEY = apiKey;
       if (!extraArgs.includes("--profile") && !extraArgs.includes("-p")) {
@@ -345,11 +274,21 @@ export function launchClient(
         extraArgs = extraArgs.concat("--model", model);
       }
       break;
+    case "hermes":
+      // Hermes Agent routes through OpenAI-compatible API
+      childEnv.OPENAI_BASE_URL = `${proxyUrl}/v1`;
+      childEnv.OPENAI_API_KEY = apiKey;
+      childEnv.HERMES_API_BASE = `${proxyUrl}/v1`;
+      childEnv.HERMES_MODEL = model;
+      childEnv.PONTIS_API_KEY = apiKey;
+      if (!extraArgs.includes("--model") && !extraArgs.includes("-m")) {
+        extraArgs = ["--model", model, ...extraArgs];
+      }
+      break;
     case "pi":
-      // Pi uses a custom provider written to models.json that points at the proxy.
-      // The API key is embedded in that provider config, but we also pass --api-key
-      // which is the most reliable way Pi resolves credentials (takes priority over
-      // models.json and env vars).
+      // Pass the key via environment only. Do NOT add it as a --api-key argv:
+      // command-line args are visible to other processes via `ps`. Pi resolves
+      // the key from OPENAI_API_KEY / PONTIS_API_KEY.
       childEnv.PONTIS_API_KEY = apiKey;
       childEnv.OPENAI_API_KEY = apiKey;
       extraArgs = [
@@ -357,25 +296,18 @@ export function launchClient(
         PI_PROVIDER_NAME,
         "--model",
         model,
-        "--api-key",
-        apiKey,
         ...extraArgs,
       ];
       break;
     case "opencode":
-      // OpenCode uses provider/model notation and reads credentials from
-      // ~/.local/share/opencode/auth.json (not env vars).
-      // The auth file was written by setupOpenCodeProvider() before launch.
-      // We pass the model as openai/<model> since Pontis speaks OpenAI format.
       if (!extraArgs.includes("--model")) {
         extraArgs = ["--model", `openai/${model}`, ...extraArgs];
       }
-      // Skip auto-fetch of models — we already know what we're using
       childEnv.OPENCODE_DISABLE_MODELS_FETCH = "true";
       break;
     default:
       // Claude Code
-      childEnv.ANTHROPIC_BASE_URL = `${PROXY_URL}`;
+      childEnv.ANTHROPIC_BASE_URL = `${proxyUrl}`;
       childEnv.ANTHROPIC_API_KEY = apiKey;
       childEnv.ANTHROPIC_MODEL = model;
       childEnv.ANTHROPIC_SMALL_FAST_MODEL = model;
@@ -383,15 +315,38 @@ export function launchClient(
       break;
   }
 
+  // Ensure common tool directories are in PATH for spawned processes
+  const home = homedir();
+  const additionalPaths = [
+    join(home, ".local", "bin"),
+    join(home, ".cargo", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ].filter((p) => existsSync(p));
+
+  if (additionalPaths.length > 0) {
+    const currentPath = childEnv.PATH || process.env.PATH || "";
+    childEnv.PATH = `${additionalPaths.join(":")}:${currentPath}`;
+  }
+
+  const binaryPath = resolveClientBinary(clientCmd as ClientName);
+  const binaryName = CLIENTS[clientCmd as ClientName]?.binary || clientCmd;
+
   const displayArgs = extraArgs.map((a) =>
     apiKey && a.includes(apiKey) ? a.replaceAll(apiKey, redactKey(apiKey)) : a,
   );
   badge(
     "muted",
-    `Spawning: ${t.accent(clientCmd)} ${t.muted(displayArgs.join(" "))}\n`,
+    `Spawning: ${t.accent(binaryName)} ${t.muted(displayArgs.join(" "))}`,
   );
 
-  const binaryPath = resolveClientBinary(clientCmd as ClientName);
+  const restoreTty = () => {
+    if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+      try { process.stdin.setRawMode(false); } catch {}
+    }
+    try { process.stdin.resume(); } catch {}
+    process.stdout.write("\x1B[?25h");
+  };
 
   return new Promise((resolve, reject) => {
     const child = spawn(binaryPath, extraArgs, {
@@ -399,11 +354,15 @@ export function launchClient(
       stdio: "inherit",
     });
     child.on("exit", (code) => {
+      restoreTty();
       if (code !== 0 && code !== null)
         warn(`${clientCmd} exited with code ${code}`);
       resolve();
     });
-    child.on("error", reject);
+    child.on("error", (err) => {
+      restoreTty();
+      reject(err);
+    });
   });
 }
 
@@ -411,10 +370,11 @@ export async function testConnectivity(
   apiKey: string,
   model: string,
   provider?: string,
+  proxyUrl = PROXY_URL,
 ): Promise<boolean> {
   const spin = createSpinner("Verifying API connection...");
   try {
-    const res = await fetch(`${PROXY_URL}/v1/messages`, {
+    const res = await fetch(`${proxyUrl}/v1/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -439,11 +399,14 @@ export async function testConnectivity(
       errorObj = JSON.parse(bodyText);
     } catch {}
 
+    const errorMsg = errorObj?.error?.message || errorObj?.message;
+    const lowerMsg = typeof errorMsg === "string" ? errorMsg.toLowerCase() : "";
+
     const isModelError =
       errorObj?.error?.type === "ModelError" ||
-      errorObj?.type === "ModelError";
-
-    const errorMsg = errorObj?.error?.message || errorObj?.message;
+      errorObj?.type === "ModelError" ||
+      lowerMsg.includes("model") ||
+      lowerMsg.includes("disabled");
 
     if (isModelError) {
       spin.stop({
@@ -466,6 +429,9 @@ export async function testConnectivity(
         console.log(`  ${t.muted(bodyText.slice(0, 200))}\n`);
       }
       switch (provider) {
+        case "google":
+          console.log(`  ${t.warning(SYM.warn)} Configure Google credentials with: ${t.primary("pontis auth set google")}\n`);
+          break;
         case "opencode":
           console.log(`  ${t.warning(SYM.warn)} Configure a valid OpenCode API key with: ${t.primary("pontis auth set opencode")}\n`);
           break;

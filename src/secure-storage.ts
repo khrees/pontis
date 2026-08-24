@@ -1,23 +1,13 @@
-/**
- * Secure credential storage using encryption.
- * Uses Node.js crypto module for AES-256-GCM encryption.
- * Falls back to environment variables in non-Node.js environments (Cloudflare Workers).
- */
-
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, renameSync, chmodSync, copyFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import * as cryptoModule from 'crypto';
 
-// Check if we're in a Node.js environment
 const isNodeEnvironment = typeof process !== 'undefined' && 
                          process.versions !== undefined && 
                          process.versions.node !== undefined;
 
-// In-memory fallback for non-Node environments
 const memoryStore: Record<string, string> = {};
-
-// Crypto module import
 const crypto = cryptoModule && typeof cryptoModule.randomBytes === 'function' ? cryptoModule : null;
 
 function getStorageDir(): string {
@@ -30,7 +20,6 @@ function getSecretKeyFile(): string {
   return join(getStorageDir(), '.secret');
 }
 
-// Ensure storage directory exists
 function ensureStorageDir(): void {
   const dir = getStorageDir();
   if (!existsSync(dir)) {
@@ -38,33 +27,50 @@ function ensureStorageDir(): void {
   }
 }
 
-// Generate or load persistent encryption key
+function warn(message: string): void {
+  try {
+    process.stderr.write(`pontis: ${message}\n`);
+  } catch {}
+}
+
+// The key file exists but is malformed. Regenerating silently would
+// permanently brick every stored credential, so back it up and warn instead.
+function handleCorruptKey(secretFile: string): void {
+  try {
+    copyFileSync(secretFile, `${secretFile}.corrupt`);
+  } catch {}
+  warn(
+    `the credential vault key (${secretFile}) is invalid — expected 32 bytes. ` +
+    `A new key was generated and the old one backed up to ${secretFile}.corrupt. ` +
+    `Credentials stored under the old key can no longer be decrypted; re-add them with \`pontis auth set\`.`,
+  );
+}
+
 function getEncryptionKey(): Buffer {
-  if (!crypto) {
-    throw new Error('Crypto module not available');
-  }
-  
+  if (!crypto) throw new Error('Crypto module not available');
+
   ensureStorageDir();
   const secretFile = getSecretKeyFile();
   if (existsSync(secretFile)) {
     try {
       const key = readFileSync(secretFile);
       if (key.length === 32) return key;
+      handleCorruptKey(secretFile);
     } catch {}
   }
-  
+
   const newKey = crypto.randomBytes(32);
   try {
     writeFileSync(secretFile, newKey, { mode: 0o600 });
+    // mode only applies on creation, so enforce it explicitly in case the file
+    // already existed with looser permissions.
+    try { chmodSync(secretFile, 0o600); } catch {}
   } catch {}
   return newKey;
 }
 
-// Encrypt data using AES-256-GCM
 function encrypt(data: string): { encrypted: string; iv: string; authTag: string } {
-  if (!crypto) {
-    throw new Error('Crypto module not available');
-  }
+  if (!crypto) throw new Error('Crypto module not available');
   
   const key = getEncryptionKey();
   const iv = crypto.randomBytes(16);
@@ -74,7 +80,6 @@ function encrypt(data: string): { encrypted: string; iv: string; authTag: string
   encrypted += cipher.final('hex');
   
   const authTag = cipher.getAuthTag();
-  
   return {
     encrypted,
     iv: iv.toString('hex'),
@@ -82,11 +87,8 @@ function encrypt(data: string): { encrypted: string; iv: string; authTag: string
   };
 }
 
-// Decrypt data using AES-256-GCM with persistent encryption key
 function decrypt(encryptedData: string, ivHex: string, authTagHex: string): string {
-  if (!crypto) {
-    throw new Error('Crypto module not available');
-  }
+  if (!crypto) throw new Error('Crypto module not available');
   
   const key = getEncryptionKey();
   const iv = Buffer.from(ivHex, 'hex');
@@ -97,11 +99,9 @@ function decrypt(encryptedData: string, ivHex: string, authTagHex: string): stri
   
   let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
-  
   return decrypted;
 }
 
-// Credential storage interface
 interface CredentialStore {
   [key: string]: {
     encrypted: string;
@@ -111,13 +111,9 @@ interface CredentialStore {
   };
 }
 
-// Load credential store
 function loadCredentialStore(): CredentialStore {
   const file = getCredentialsFile();
-  if (!existsSync(file)) {
-    return {};
-  }
-  
+  if (!existsSync(file)) return {};
   try {
     const data = readFileSync(file, 'utf8');
     return JSON.parse(data) as CredentialStore;
@@ -126,25 +122,32 @@ function loadCredentialStore(): CredentialStore {
   }
 }
 
-// Save credential store
 function saveCredentialStore(store: CredentialStore): void {
   ensureStorageDir();
-  writeFileSync(getCredentialsFile(), JSON.stringify(store, null, 2), {
-    mode: 0o600,
-  });
+  const file = getCredentialsFile();
+  const tmp = `${file}.tmp`;
+  const json = JSON.stringify(store, null, 2);
+  // Write to a temp file then rename so a crash mid-write can't truncate the
+  // store and silently wipe every credential.
+  writeFileSync(tmp, json, { mode: 0o600 });
+  try {
+    renameSync(tmp, file);
+  } catch {
+    // rename-over-existing can fail on some platforms; fall back to a direct write.
+    writeFileSync(file, json, { mode: 0o600 });
+    try { unlinkSync(tmp); } catch {}
+  }
+  try { chmodSync(file, 0o600); } catch {}
 }
 
-// Store a credential securely
 export function storeCredential(key: string, value: string): void {
   if (!isNodeEnvironment) {
-    // Fallback to memory storage for Cloudflare Workers
     memoryStore[key] = value;
     return;
   }
   
   ensureStorageDir();
   const store = loadCredentialStore();
-  
   const { encrypted, iv, authTag } = encrypt(value);
   store[key] = {
     encrypted,
@@ -152,35 +155,31 @@ export function storeCredential(key: string, value: string): void {
     authTag,
     timestamp: Date.now(),
   };
-  
   saveCredentialStore(store);
 }
 
-// Retrieve a credential securely
 export function retrieveCredential(key: string): string | null {
-  if (!isNodeEnvironment) {
-    // Fallback to memory storage for Cloudflare Workers
-    return memoryStore[key] || null;
-  }
+  if (!isNodeEnvironment) return memoryStore[key] || null;
   
   const store = loadCredentialStore();
   const entry = store[key];
-  
-  if (!entry) {
-    return null;
-  }
+  if (!entry) return null;
   
   try {
     return decrypt(entry.encrypted, entry.iv, entry.authTag);
   } catch {
+    // The entry exists but won't decrypt (corrupt store or a rotated key).
+    // Surface this rather than silently acting as if no credential is stored.
+    warn(
+      `stored credential "${key}" could not be decrypted (the vault key may have changed). ` +
+      `Re-add it with \`pontis auth set\`.`,
+    );
     return null;
   }
 }
 
-// Delete a credential
 export function deleteCredential(key: string): void {
   if (!isNodeEnvironment) {
-    // Fallback to memory storage for Cloudflare Workers
     delete memoryStore[key];
     return;
   }
@@ -190,56 +189,40 @@ export function deleteCredential(key: string): void {
   saveCredentialStore(store);
 }
 
-// Check if a credential exists
 export function hasCredential(key: string): boolean {
-  if (!isNodeEnvironment) {
-    // Fallback to memory storage for Cloudflare Workers
-    return key in memoryStore;
-  }
-  
+  if (!isNodeEnvironment) return key in memoryStore;
   const store = loadCredentialStore();
   return key in store;
 }
 
-// List all credential keys (without values)
 export function listCredentialKeys(): string[] {
-  if (!isNodeEnvironment) {
-    // Fallback to memory storage for Cloudflare Workers
-    return Object.keys(memoryStore);
-  }
-  
+  if (!isNodeEnvironment) return Object.keys(memoryStore);
   const store = loadCredentialStore();
   return Object.keys(store);
 }
 
-// Clear all credentials
 export function clearAllCredentials(): void {
   if (!isNodeEnvironment) {
-    // Fallback to memory storage for Cloudflare Workers
     Object.keys(memoryStore).forEach(key => delete memoryStore[key]);
     return;
   }
-  
-  const file = getCredentialsFile();
-  if (existsSync(file)) {
-    if (crypto) {
-      // Securely delete by overwriting with random data
-      const randomData = crypto.randomBytes(1024);
-      writeFileSync(file, randomData.toString('hex'));
-    }
-    // Then delete the file
-    unlinkSync(file);
+
+  // Overwriting with random data does not reliably erase data on CoW/SSD/
+  // journaled filesystems, so just delete the store and the encryption key.
+  for (const file of [getCredentialsFile(), getSecretKeyFile()]) {
+    try {
+      if (existsSync(file)) unlinkSync(file);
+    } catch {}
   }
 }
 
-// Specific credential types for Pontis
 export const CREDENTIAL_KEYS = {
   OPENCODE_API_KEY: 'opencode_api_key',
   CLOUDFLARE_API_TOKEN: 'cloudflare_api_token',
   LOCAL_API_KEY: 'local_api_key',
+  GOOGLE_API_KEY: 'google_api_key',
 } as const;
 
-// Convenience functions for specific credential types
 export function storeOpenCodeApiKey(apiKey: string): void {
   storeCredential(CREDENTIAL_KEYS.OPENCODE_API_KEY, apiKey);
 }
@@ -274,4 +257,16 @@ export function retrieveLocalApiKey(): string | null {
 
 export function deleteLocalApiKey(): void {
   deleteCredential(CREDENTIAL_KEYS.LOCAL_API_KEY);
+}
+
+export function storeGoogleApiKey(apiKey: string): void {
+  storeCredential(CREDENTIAL_KEYS.GOOGLE_API_KEY, apiKey);
+}
+
+export function retrieveGoogleApiKey(): string | null {
+  return retrieveCredential(CREDENTIAL_KEYS.GOOGLE_API_KEY);
+}
+
+export function deleteGoogleApiKey(): void {
+  deleteCredential(CREDENTIAL_KEYS.GOOGLE_API_KEY);
 }
