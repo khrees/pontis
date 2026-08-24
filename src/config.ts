@@ -14,6 +14,7 @@ import { isFreeOpenCodeModel } from "./opencode-models";
 
 export const GO_UPSTREAM = getGoUpstream("https://opencode.ai/zen/go/v1");
 export const ZEN_UPSTREAM = getZenUpstream("https://opencode.ai/zen/v1");
+export const GOOGLE_DEFAULT_UPSTREAM = "https://generativelanguage.googleapis.com/v1beta/openai";
 export const DEFAULT_UPSTREAM = GO_UPSTREAM;
 export const VISION_MODEL = "qwen3.6-plus";
 
@@ -24,7 +25,7 @@ export function getVisionModel(): string {
     return "@cf/meta/llama-3.2-11b-vision-instruct";
   }
   if (getProvider() === "google") {
-    return "gemini-2.5-flash";
+    return "gemini-3.6-flash";
   }
   return VISION_MODEL;
 }
@@ -71,7 +72,7 @@ export function getDefaultFreeModel(): string {
     return "llama3";
   }
   if (getProvider() === "google") {
-    return "gemini-2.5-flash";
+    return "gemini-3.6-flash";
   }
   return "mimo-v2.5-free";
 }
@@ -135,14 +136,15 @@ export function routeConfig(request: Request): RouteConfig {
   }
 
   const { path: remaining, model } = extractModelSegment(path);
-  return { path: remaining, upstream: DEFAULT_UPSTREAM, modelOverride: model };
+  const defaultUp = getProvider() === "google" ? GOOGLE_DEFAULT_UPSTREAM : DEFAULT_UPSTREAM;
+  return { path: remaining, upstream: defaultUp, modelOverride: model };
 }
 
 export function getUpstream(routeUpstream: string): string {
-  return (
-    getUpstreamUrl() ||
-    routeUpstream
-  );
+  const target = getUpstreamUrl();
+  if (target) return target;
+  if (getProvider() === "google") return GOOGLE_DEFAULT_UPSTREAM;
+  return routeUpstream;
 }
 
 export function upstreamFormat(): "openai" | "anthropic" | "openai-completions" {
@@ -165,6 +167,11 @@ export function selectUpstream(
 ): string {
   const targetUpstream = getUpstreamUrl();
   if (targetUpstream) return targetUpstream;
+
+  const provider = getProvider();
+  if (provider === "google") {
+    return GOOGLE_DEFAULT_UPSTREAM;
+  }
 
   const path = new URL(request.url).pathname;
   if (path.startsWith("/go")) return GO_UPSTREAM;
@@ -222,10 +229,10 @@ export function resolveModelAndUpstream(
   let resolvedModel = model;
   const baseUpstream = getUpstream(routeUpstream);
   const provider = getProvider();
-
-  const isOpencode = baseUpstream.includes("opencode.ai") || provider === "opencode";
-  const isCloudflare = baseUpstream.includes("gateway.ai.cloudflare.com") || provider === "cloudflare";
-  const isGoogle = baseUpstream.includes("googleapis.com") || provider === "google";
+  const isGoogle = provider === "google" || baseUpstream.includes("googleapis.com");
+  const isCloudflare = provider === "cloudflare" || baseUpstream.includes("gateway.ai.cloudflare.com");
+  const isLocal = provider === "local" || baseUpstream.includes("localhost") || baseUpstream.includes("127.0.0.1");
+  const isOpencode = !isGoogle && !isCloudflare && !isLocal && (provider === "opencode" || baseUpstream.includes("opencode.ai"));
 
   if (isOpencode || isCloudflare || isGoogle) {
     resolvedModel = resolveModel(resolvedModel);
