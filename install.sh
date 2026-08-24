@@ -163,8 +163,13 @@ elif [ -n "$PONTIS_VERSION" ]; then
   TAG_NAME="$PONTIS_VERSION"
   info "Using specified version: $TAG_NAME"
 else
-  RELEASE_INFO=$(curl -s https://api.github.com/repos/$REPO/releases/latest || echo "")
-  TAG_NAME=$(echo "$RELEASE_INFO" | grep -o '"tag_name": "[^"]*' | grep -o '[^"]*$' || echo "")
+  # Fetch latest release from /releases to automatically pick up the newest version
+  RELEASE_INFO=$(curl -s "https://api.github.com/repos/$REPO/releases" || echo "")
+  TAG_NAME=$(echo "$RELEASE_INFO" | grep -o '"tag_name": "[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
+  if [ -z "$TAG_NAME" ]; then
+    RELEASE_INFO=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" || echo "")
+    TAG_NAME=$(echo "$RELEASE_INFO" | grep -o '"tag_name": "[^"]*' | grep -o '[^"]*$' || echo "")
+  fi
   if [ -z "$TAG_NAME" ]; then
     error "Failed to retrieve latest release version from GitHub API. Please check your internet connection."
   fi
