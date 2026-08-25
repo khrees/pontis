@@ -1,0 +1,1531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <!-- Primary Meta Tags -->
+  <title>Pontis — Universal AI Gateway & CLI Runtime Bridge</title>
+  <meta name="title" content="Pontis — Universal AI Gateway & CLI Runtime Bridge">
+  <meta name="description" content="Bridge any terminal AI coding agent (Claude Code, OpenAI Codex CLI, Hermes Agent, OpenCode, Pi) to any LLM backend (Google AI Studio, OpenCode, Cloudflare Workers AI, Local Ollama) with real-time bidirectional protocol translation.">
+  <meta name="keywords" content="Claude Code, Codex CLI, Hermes Agent, OpenCode, Pi agent, AI Gateway, LLM Proxy, Ollama, Gemini 2.5, Cloudflare AI Gateway, Protocol Translation">
+  <meta name="author" content="Khrees">
+  <meta name="theme-color" content="#07090e">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://pontis.khrees.com/">
+  <meta property="og:title" content="Pontis — Universal AI Gateway & CLI Runtime Bridge">
+  <meta property="og:description" content="Run Claude Code, Codex, Hermes, OpenCode, and Pi with free Google AI Studio, OpenCode cloud, Cloudflare Workers AI, or local Ollama with zero friction.">
+  
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:title" content="Pontis — Universal AI Gateway & CLI Runtime Bridge">
+  <meta property="twitter:description" content="Run Claude Code, Codex, Hermes, OpenCode, and Pi with free Google AI Studio, OpenCode cloud, Cloudflare Workers AI, or local Ollama with zero friction.">
+
+  <!-- Typography: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+
+  <style>
+    /* ─────────────────────────────────────────────────────────────
+       1. Design Tokens & Apple-Inspired Material Foundations
+       ───────────────────────────────────────────────────────────── */
+    :root {
+      --bg-canvas: #07090e;
+      --bg-surface: #0e111a;
+      --bg-surface-raised: #141824;
+      --bg-surface-glass: rgba(14, 17, 26, 0.72);
+      --bg-surface-active: rgba(255, 255, 255, 0.06);
+      
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-medium: rgba(255, 255, 255, 0.14);
+      --border-highlight: rgba(167, 139, 250, 0.4);
+      --border-focus: #a78bfa;
+
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --text-faint: #475569;
+
+      --brand-primary: #a78bfa;     /* Lilac / Violet */
+      --brand-cyan: #38bdf8;        /* Vivid Cyan */
+      --brand-emerald: #34d399;     /* Emerald Success */
+      --brand-amber: #fbbf24;      /* Warm Amber */
+      --brand-rose: #f87171;       /* Rose Error */
+
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Monaco, Consolas, monospace;
+
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 18px;
+      --radius-xl: 24px;
+      --radius-pill: 9999px;
+
+      --shadow-ambient: 0 4px 24px -1px rgba(0, 0, 0, 0.4);
+      --shadow-elevation: 0 16px 40px -8px rgba(0, 0, 0, 0.6);
+      --shadow-glow: 0 0 40px -10px rgba(167, 139, 250, 0.25);
+
+      --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-instant: cubic-bezier(0.05, 0.7, 0.1, 1);
+      --duration-fast: 150ms;
+      --duration-base: 250ms;
+      --duration-slow: 400ms;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       2. Base Reset & Typography
+       ───────────────────────────────────────────────────────────── */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      font-size: 16px;
+      background-color: var(--bg-canvas);
+      color: var(--text-primary);
+    }
+
+    body {
+      font-family: var(--font-sans);
+      line-height: 1.6;
+      background-color: var(--bg-canvas);
+      background-image: 
+        radial-gradient(ellipse 80% 50% at 50% -15%, rgba(167, 139, 250, 0.12), transparent 70%),
+        radial-gradient(circle 600px at 90% 20%, rgba(56, 189, 248, 0.05), transparent 80%);
+      background-attachment: fixed;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    ::selection {
+      background: rgba(167, 139, 250, 0.3);
+      color: #fff;
+    }
+
+    a {
+      color: var(--brand-primary);
+      text-decoration: none;
+      transition: color var(--duration-fast) ease, opacity var(--duration-fast) ease;
+    }
+
+    a:hover {
+      color: var(--brand-cyan);
+    }
+
+    button {
+      font-family: inherit;
+      border: none;
+      background: none;
+      cursor: pointer;
+    }
+
+    code, pre {
+      font-family: var(--font-mono);
+      font-feature-settings: "liga" 0;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       3. Translucent Header & Navigation
+       ───────────────────────────────────────────────────────────── */
+    header.site-header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      background: var(--bg-surface-glass);
+      border-bottom: 1px solid var(--border-subtle);
+      transition: border-color var(--duration-base) ease;
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 68px;
+    }
+
+    .brand-link {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-primary);
+      font-weight: 700;
+      font-size: 1.15rem;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-symbol {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, rgba(167, 139, 250, 0.25), rgba(56, 189, 248, 0.2));
+      border: 1px solid rgba(167, 139, 250, 0.35);
+      color: var(--brand-primary);
+      font-size: 0.95rem;
+    }
+
+    .brand-version {
+      font-size: 0.72rem;
+      font-family: var(--font-mono);
+      font-weight: 600;
+      padding: 2px 8px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-pill);
+      color: var(--text-secondary);
+    }
+
+    nav.nav-menu {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+    }
+
+    .nav-item {
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      transition: color var(--duration-fast) ease;
+    }
+
+    .nav-item:hover {
+      color: var(--text-primary);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      transition: transform var(--duration-fast) var(--ease-instant), 
+                  background-color var(--duration-fast) ease, 
+                  border-color var(--duration-fast) ease,
+                  box-shadow var(--duration-fast) ease;
+    }
+
+    .btn:active {
+      transform: scale(0.97);
+    }
+
+    .btn-primary {
+      background: var(--text-primary);
+      color: #000;
+      border: 1px solid transparent;
+    }
+
+    .btn-primary:hover {
+      background: #ffffff;
+      color: #000;
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.09);
+      border-color: var(--border-medium);
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       4. Hero Section & Interactive Terminal Demonstration
+       ───────────────────────────────────────────────────────────── */
+    .hero-section {
+      padding: 72px 0 60px;
+      position: relative;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.95fr;
+      gap: 48px;
+      align-items: center;
+    }
+
+    .hero-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--brand-primary);
+      background: rgba(167, 139, 250, 0.08);
+      border: 1px solid rgba(167, 139, 250, 0.2);
+      padding: 4px 12px;
+      border-radius: var(--radius-pill);
+      margin-bottom: 20px;
+      letter-spacing: 0.02em;
+    }
+
+    .hero-tag-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--brand-emerald);
+      box-shadow: 0 0 8px var(--brand-emerald);
+    }
+
+    h1.hero-title {
+      font-size: clamp(2.4rem, 4.2vw, 3.8rem);
+      font-weight: 800;
+      line-height: 1.08;
+      letter-spacing: -0.035em;
+      color: var(--text-primary);
+      margin-bottom: 20px;
+    }
+
+    .hero-title span.gradient {
+      background: linear-gradient(135deg, #f8fafc 20%, #a78bfa 70%, #38bdf8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    p.hero-subtitle {
+      font-size: 1.12rem;
+      line-height: 1.65;
+      color: var(--text-secondary);
+      margin-bottom: 32px;
+      max-width: 540px;
+    }
+
+    .hero-cta-group {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 36px;
+    }
+
+    .copy-install-box {
+      display: inline-flex;
+      align-items: center;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid var(--border-medium);
+      border-radius: var(--radius-sm);
+      padding: 4px 6px 4px 14px;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      gap: 12px;
+    }
+
+    .copy-install-box code {
+      color: var(--brand-cyan);
+    }
+
+    .copy-btn {
+      padding: 6px 12px;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 0.78rem;
+      font-weight: 600;
+      transition: all var(--duration-fast) ease;
+    }
+
+    .copy-btn:hover {
+      background: rgba(255, 255, 255, 0.14);
+      color: #fff;
+    }
+
+    .hero-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .hero-badge-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .hero-badge-item span.icon {
+      color: var(--brand-emerald);
+      font-weight: bold;
+    }
+
+    /* Terminal Simulator Card */
+    .terminal-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-medium);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-elevation), var(--shadow-glow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .terminal-header {
+      background: rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .window-controls {
+      display: flex;
+      gap: 7px;
+    }
+
+    .window-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .window-dot.red { background: #ff5f56; }
+    .window-dot.yellow { background: #ffbd2e; }
+    .window-dot.green { background: #27c93f; }
+
+    .terminal-tabs {
+      display: flex;
+      gap: 4px;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 3px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .t-tab {
+      padding: 4px 10px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      border-radius: 5px;
+      transition: all var(--duration-fast) ease;
+    }
+
+    .t-tab.active {
+      background: var(--bg-surface-raised);
+      color: var(--text-primary);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    }
+
+    .terminal-body {
+      padding: 20px;
+      font-family: var(--font-mono);
+      font-size: 0.84rem;
+      line-height: 1.7;
+      min-height: 280px;
+      color: var(--text-secondary);
+      background: #090b10;
+    }
+
+    .t-line {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .t-prompt {
+      color: var(--brand-primary);
+      user-select: none;
+      font-weight: 600;
+    }
+
+    .t-cmd {
+      color: #fff;
+      font-weight: 500;
+    }
+
+    .t-dim { color: var(--text-muted); }
+    .t-cyan { color: var(--brand-cyan); }
+    .t-green { color: var(--brand-emerald); }
+    .t-amber { color: var(--brand-amber); }
+    .t-purple { color: var(--brand-primary); }
+
+    /* ─────────────────────────────────────────────────────────────
+       5. Architecture & Live Protocol Bridge Visualizer
+       ───────────────────────────────────────────────────────────── */
+    .section {
+      padding: 80px 0;
+      border-top: 1px solid var(--border-subtle);
+      position: relative;
+    }
+
+    .section-header {
+      text-align: center;
+      max-width: 680px;
+      margin: 0 auto 54px;
+    }
+
+    .section-tag {
+      display: inline-block;
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--brand-primary);
+      margin-bottom: 12px;
+    }
+
+    h2.section-title {
+      font-size: clamp(1.8rem, 3vw, 2.6rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--text-primary);
+      margin-bottom: 16px;
+    }
+
+    p.section-desc {
+      font-size: 1.05rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    /* Architecture Visualizer Diagram */
+    .bridge-diagram {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-medium);
+      border-radius: var(--radius-xl);
+      padding: 40px;
+      box-shadow: var(--shadow-ambient);
+      display: grid;
+      grid-template-columns: 1fr 60px 1.25fr 60px 1fr;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .diagram-col {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .col-title {
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .diagram-card {
+      background: var(--bg-surface-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 12px 16px;
+      font-size: 0.86rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: all var(--duration-fast) ease;
+    }
+
+    .diagram-card:hover {
+      border-color: var(--border-highlight);
+      background: rgba(255, 255, 255, 0.05);
+      transform: translateY(-2px);
+    }
+
+    .diagram-card span.badge-protocol {
+      font-size: 0.7rem;
+      font-family: var(--font-mono);
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-secondary);
+    }
+
+    .hub-box {
+      background: linear-gradient(180deg, rgba(167, 139, 250, 0.12) 0%, rgba(56, 189, 248, 0.08) 100%);
+      border: 1px solid var(--border-highlight);
+      border-radius: var(--radius-lg);
+      padding: 24px 20px;
+      text-align: center;
+      box-shadow: 0 8px 30px rgba(167, 139, 250, 0.15);
+    }
+
+    .hub-title {
+      font-size: 1.05rem;
+      font-weight: 800;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .hub-desc {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+
+    .hub-features {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      text-align: left;
+      font-size: 0.78rem;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    .hub-feature-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(0, 0, 0, 0.25);
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    .hub-feature-item span.chk { color: var(--brand-emerald); }
+
+    .connector-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-faint);
+      font-size: 1.2rem;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       6. Interactive Sandbox & Launch Command Generator
+       ───────────────────────────────────────────────────────────── */
+    .sandbox-panel {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-medium);
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      box-shadow: var(--shadow-elevation);
+    }
+
+    .sandbox-sidebar {
+      background: rgba(0, 0, 0, 0.35);
+      border-right: 1px solid var(--border-subtle);
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .control-label {
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+    }
+
+    .select-pill-group {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+    }
+
+    .pill-btn {
+      padding: 8px 10px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      text-align: center;
+      transition: all var(--duration-fast) ease;
+    }
+
+    .pill-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-primary);
+    }
+
+    .pill-btn.active {
+      background: var(--brand-primary);
+      color: #000;
+      border-color: var(--brand-primary);
+      font-weight: 700;
+    }
+
+    .custom-select {
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--bg-surface-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 0.88rem;
+      font-weight: 500;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .custom-select:focus {
+      border-color: var(--brand-primary);
+    }
+
+    .sandbox-content {
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      background: var(--bg-surface);
+    }
+
+    .sandbox-code-block {
+      background: #090b10;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 18px 20px;
+      position: relative;
+    }
+
+    .code-title {
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .code-body {
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      color: var(--brand-cyan);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       7. Supported Providers & Matrix
+       ───────────────────────────────────────────────────────────── */
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+
+    .provider-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 28px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      transition: all var(--duration-base) var(--ease-spring);
+    }
+
+    .provider-card:hover {
+      border-color: var(--border-medium);
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-ambient);
+    }
+
+    .card-icon-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .provider-badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: var(--radius-pill);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-free {
+      background: rgba(52, 211, 153, 0.12);
+      color: var(--brand-emerald);
+      border: 1px solid rgba(52, 211, 153, 0.25);
+    }
+
+    .badge-local {
+      background: rgba(56, 189, 248, 0.12);
+      color: var(--brand-cyan);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+    }
+
+    .badge-cloud {
+      background: rgba(251, 191, 36, 0.12);
+      color: var(--brand-amber);
+      border: 1px solid rgba(251, 191, 36, 0.25);
+    }
+
+    h3.card-title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    p.card-desc {
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+      line-height: 1.55;
+    }
+
+    .model-pill-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: auto;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .model-tag {
+      font-size: 0.74rem;
+      font-family: var(--font-mono);
+      background: rgba(255, 255, 255, 0.05);
+      padding: 2px 7px;
+      border-radius: 4px;
+      color: var(--text-secondary);
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       8. CLI Commands & Endpoints Reference
+       ───────────────────────────────────────────────────────────── */
+    .reference-table-wrap {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    table.ref-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.9rem;
+    }
+
+    table.ref-table th {
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--border-medium);
+      padding: 14px 20px;
+      font-weight: 700;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+    }
+
+    table.ref-table td {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+    }
+
+    table.ref-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    table.ref-table code {
+      color: var(--brand-primary);
+      font-size: 0.84rem;
+      background: rgba(167, 139, 250, 0.08);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       9. FAQ & Accordion
+       ───────────────────────────────────────────────────────────── */
+    .faq-list {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      max-width: 840px;
+      margin: 0 auto;
+    }
+
+    .faq-item {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      transition: border-color var(--duration-fast) ease;
+    }
+
+    .faq-item:hover {
+      border-color: var(--border-medium);
+    }
+
+    .faq-trigger {
+      width: 100%;
+      padding: 20px 24px;
+      text-align: left;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .faq-icon {
+      font-size: 1.2rem;
+      color: var(--text-muted);
+      transition: transform var(--duration-fast) ease;
+    }
+
+    .faq-content {
+      padding: 0 24px 22px;
+      color: var(--text-secondary);
+      font-size: 0.94rem;
+      line-height: 1.65;
+      display: none;
+    }
+
+    .faq-item.open .faq-content {
+      display: block;
+    }
+
+    .faq-item.open .faq-icon {
+      transform: rotate(45deg);
+      color: var(--brand-primary);
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       10. Footer
+       ───────────────────────────────────────────────────────────── */
+    footer.site-footer {
+      border-top: 1px solid var(--border-subtle);
+      padding: 48px 0;
+      background: #05060a;
+      color: var(--text-muted);
+      font-size: 0.86rem;
+    }
+
+    .footer-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       11. Responsive Breakpoints
+       ───────────────────────────────────────────────────────────── */
+    @media (max-width: 992px) {
+      .hero-grid {
+        grid-template-columns: 1fr;
+      }
+      .bridge-diagram {
+        grid-template-columns: 1fr;
+        gap: 24px;
+      }
+      .connector-arrow {
+        transform: rotate(90deg);
+      }
+      .sandbox-panel {
+        grid-template-columns: 1fr;
+      }
+      .grid-4 {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 640px) {
+      .grid-4 {
+        grid-template-columns: 1fr;
+      }
+      nav.nav-menu {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Translucent Navigation Header -->
+  <header class="site-header">
+    <div class="container">
+      <div class="header-inner">
+        <a href="#" class="brand-link">
+          <span class="brand-symbol">◆</span>
+          <span>Pontis</span>
+          <span class="brand-version">v1.1.0</span>
+        </a>
+
+        <nav class="nav-menu">
+          <a href="#architecture" class="nav-item">Architecture</a>
+          <a href="#sandbox" class="nav-item">Sandbox</a>
+          <a href="#providers" class="nav-item">Providers</a>
+          <a href="#clients" class="nav-item">Coding Agents</a>
+          <a href="#cli" class="nav-item">CLI Manual</a>
+          <a href="#faq" class="nav-item">FAQ</a>
+        </nav>
+
+        <div class="header-actions">
+          <a href="https://github.com/khrees/pontis" target="_blank" rel="noreferrer" class="btn btn-secondary">
+            <span>GitHub</span>
+          </a>
+          <a href="#sandbox" class="btn btn-primary">Launch Gateway</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero-section">
+    <div class="container">
+      <div class="hero-grid">
+        <div class="hero-content">
+          <div class="hero-tag">
+            <span class="hero-tag-dot"></span>
+            <span>Universal AI Gateway & Protocol Translator</span>
+          </div>
+
+          <h1 class="hero-title">
+            Run any coding agent on <span class="gradient">any LLM model</span>.
+          </h1>
+
+          <p class="hero-subtitle">
+            A high-performance local gateway bridging Claude Code, Codex CLI, Hermes Agent, OpenCode, and Pi to Google Gemini, OpenCode, Cloudflare Workers AI, and Ollama.
+          </p>
+
+          <div class="hero-cta-group">
+            <div class="copy-install-box">
+              <code>curl -fsSL https://pontis.khrees.com/install.sh | bash</code>
+              <button class="copy-btn" onclick="copyInstallCmd(this)">Copy</button>
+            </div>
+            <a href="#sandbox" class="btn btn-primary" style="padding: 10px 20px;">Try Interactive Launcher</a>
+          </div>
+
+          <div class="hero-badges">
+            <div class="hero-badge-item"><span class="icon">✓</span> 100% Free AI Studio & OpenCode Models</div>
+            <div class="hero-badge-item"><span class="icon">✓</span> Real-Time Bidirectional Translation</div>
+            <div class="hero-badge-item"><span class="icon">✓</span> AES-256-GCM Secure Vault</div>
+          </div>
+        </div>
+
+        <!-- Terminal Interactive Demonstration -->
+        <div class="terminal-card">
+          <div class="terminal-header">
+            <div class="window-controls">
+              <span class="window-dot red"></span>
+              <span class="window-dot yellow"></span>
+              <span class="window-dot green"></span>
+            </div>
+            <div class="terminal-tabs">
+              <button class="t-tab active" onclick="switchTerminalTab('claude', this)">Claude Code</button>
+              <button class="t-tab" onclick="switchTerminalTab('codex', this)">Codex</button>
+              <button class="t-tab" onclick="switchTerminalTab('hermes', this)">Hermes</button>
+            </div>
+          </div>
+
+          <div class="terminal-body" id="terminal-screen">
+            <div class="t-line"><span class="t-prompt">$</span> <span class="t-cmd">pontis claude</span></div>
+            <div class="t-line t-dim">  ◆ Pontis Gateway v1.1.0</div>
+            <div class="t-line t-green">  ✓ Proxy running on http://localhost:8787</div>
+            <div class="t-line t-green">  ✓ Upstream verified: Google AI Studio (gemini-2.5-flash)</div>
+            <div class="t-line t-dim">  ● Launching Claude Code...</div>
+            <div class="t-line"><span class="t-cyan">  · Spawning: claude</span></div>
+            <div class="t-line t-purple">  Claude Code is ready. How can I help you today?</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section: Architecture & Protocol Translation Visualizer -->
+  <section class="section" id="architecture">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Architecture</span>
+        <h2 class="section-title">Bidirectional Protocol Translation</h2>
+        <p class="section-desc">
+          Pontis runs as an ultra-fast local proxy converting requests, parameters, tool calls, and streaming SSE tokens in real time.
+        </p>
+      </div>
+
+      <div class="bridge-diagram">
+        <!-- Col 1: Agents -->
+        <div class="diagram-col">
+          <div class="col-title">1. Coding Agents</div>
+          <div class="diagram-card"><span>Claude Code</span> <span class="badge-protocol">/v1/messages</span></div>
+          <div class="diagram-card"><span>Codex CLI</span> <span class="badge-protocol">/v1/responses</span></div>
+          <div class="diagram-card"><span>Hermes Agent</span> <span class="badge-protocol">OpenAI Chat</span></div>
+          <div class="diagram-card"><span>OpenCode</span> <span class="badge-protocol">OpenAI API</span></div>
+          <div class="diagram-card"><span>Pi Agent</span> <span class="badge-protocol">Completions</span></div>
+        </div>
+
+        <div class="connector-arrow">➔</div>
+
+        <!-- Col 2: Pontis Hub -->
+        <div class="hub-box">
+          <div class="hub-title">🌌 Pontis Gateway</div>
+          <div class="hub-desc">Local Proxy on <code>http://localhost:8787</code></div>
+          <div class="hub-features">
+            <div class="hub-feature-item"><span class="chk">✓</span> Protocol Engine (Anthropic ↔ OpenAI)</div>
+            <div class="hub-feature-item"><span class="chk">✓</span> Responses API Translation (Codex)</div>
+            <div class="hub-feature-item"><span class="chk">✓</span> SSE Stream Normalizer</div>
+            <div class="hub-feature-item"><span class="chk">✓</span> Encrypted Credential Vault</div>
+          </div>
+        </div>
+
+        <div class="connector-arrow">➔</div>
+
+        <!-- Col 3: Upstream Providers -->
+        <div class="diagram-col">
+          <div class="col-title">3. Upstream LLMs</div>
+          <div class="diagram-card"><span>Google AI Studio</span> <span class="badge-protocol">Gemini 2.5</span></div>
+          <div class="diagram-card"><span>OpenCode Cloud</span> <span class="badge-protocol">Zen / Go Free</span></div>
+          <div class="diagram-card"><span>Cloudflare AI</span> <span class="badge-protocol">Workers AI</span></div>
+          <div class="diagram-card"><span>Local Ollama / LM</span> <span class="badge-protocol">Localhost</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section: Interactive Sandbox & Command Generator -->
+  <section class="section" id="sandbox">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Interactive Sandbox</span>
+        <h2 class="section-title">Configure & Generate Launch Commands</h2>
+        <p class="section-desc">
+          Select your target coding agent, provider, and model to generate ready-to-run terminal commands and environment configurations.
+        </p>
+      </div>
+
+      <div class="sandbox-panel">
+        <div class="sandbox-sidebar">
+          <div class="control-group">
+            <label class="control-label">1. Choose Coding Agent</label>
+            <div class="select-pill-group">
+              <button class="pill-btn active" onclick="setSandboxAgent('claude', this)">Claude Code</button>
+              <button class="pill-btn" onclick="setSandboxAgent('codex', this)">Codex</button>
+              <button class="pill-btn" onclick="setSandboxAgent('hermes', this)">Hermes</button>
+              <button class="pill-btn" onclick="setSandboxAgent('opencode', this)">OpenCode</button>
+              <button class="pill-btn" onclick="setSandboxAgent('pi', this)">Pi Agent</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <label class="control-label">2. Choose Provider</label>
+            <select class="custom-select" id="sandbox-provider-select" onchange="onSandboxProviderChange(this.value)">
+              <option value="google">Google AI Studio (Gemini 2.5)</option>
+              <option value="opencode">OpenCode Cloud (Free Models)</option>
+              <option value="cloudflare">Cloudflare Workers AI</option>
+              <option value="local">Local Ollama / LM Studio</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label class="control-label">3. Select Model</label>
+            <select class="custom-select" id="sandbox-model-select" onchange="updateSandboxCode()">
+              <option value="gemini-2.5-flash">gemini-2.5-flash (Fast & Free)</option>
+              <option value="gemini-2.5-pro">gemini-2.5-pro (Reasoning)</option>
+              <option value="gemma-2-27b-it">gemma-2-27b-it</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="sandbox-content">
+          <div class="sandbox-code-block">
+            <div class="code-title">1-Click Pontis CLI Launcher</div>
+            <div class="code-body" id="sandbox-cli-cmd">pontis claude --provider google --model gemini-2.5-flash</div>
+          </div>
+
+          <div class="sandbox-code-block">
+            <div class="code-title">Or Set Standing Preferences</div>
+            <div class="code-body" id="sandbox-config-cmd">pontis config set provider google
+pontis config set model gemini-2.5-flash
+pontis claude</div>
+          </div>
+
+          <div class="sandbox-code-block">
+            <div class="code-title">Direct Agent Environment Variables (Optional Manual Wiring)</div>
+            <div class="code-body" id="sandbox-env-cmd">export ANTHROPIC_BASE_URL="http://localhost:8787"</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section: Supported Providers -->
+  <section class="section" id="providers">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">Supported Providers</span>
+        <h2 class="section-title">Zero Friction AI Backends</h2>
+        <p class="section-desc">
+          Authenticate once into Pontis's encrypted vault. Switch providers anytime with zero client reconfiguration.
+        </p>
+      </div>
+
+      <div class="grid-4">
+        <!-- Google -->
+        <div class="provider-card">
+          <div class="card-icon-header">
+            <span style="font-size: 1.5rem;">✨</span>
+            <span class="provider-badge badge-free">Instant Free</span>
+          </div>
+          <h3 class="card-title">Google AI Studio</h3>
+          <p class="card-desc">
+            Use Gemini 2.5 Flash and Pro without a paid subscription using your free AI Studio API key.
+          </p>
+          <div class="model-pill-list">
+            <span class="model-tag">gemini-2.5-flash</span>
+            <span class="model-tag">gemini-2.5-pro</span>
+            <span class="model-tag">gemma-2-27b</span>
+          </div>
+        </div>
+
+        <!-- OpenCode -->
+        <div class="provider-card">
+          <div class="card-icon-header">
+            <span style="font-size: 1.5rem;">⚡</span>
+            <span class="provider-badge badge-free">Free Cloud</span>
+          </div>
+          <h3 class="card-title">OpenCode Cloud</h3>
+          <p class="card-desc">
+            Access free DeepSeek, Nemotron, Mimo, and Qwen models through OpenCode Zen endpoints.
+          </p>
+          <div class="model-pill-list">
+            <span class="model-tag">deepseek-v4-flash</span>
+            <span class="model-tag">nemotron-3.5-lightning</span>
+            <span class="model-tag">mimo-v2.5</span>
+          </div>
+        </div>
+
+        <!-- Cloudflare -->
+        <div class="provider-card">
+          <div class="card-icon-header">
+            <span style="font-size: 1.5rem;">☁️</span>
+            <span class="provider-badge badge-cloud">Global Edge</span>
+          </div>
+          <h3 class="card-title">Cloudflare Workers AI</h3>
+          <p class="card-desc">
+            Route through Cloudflare AI Gateway for edge caching, observability, and serverless LLMs.
+          </p>
+          <div class="model-pill-list">
+            <span class="model-tag">@cf/moonshot/kimi</span>
+            <span class="model-tag">@cf/meta/llama-3.3</span>
+          </div>
+        </div>
+
+        <!-- Local -->
+        <div class="provider-card">
+          <div class="card-icon-header">
+            <span style="font-size: 1.5rem;">💻</span>
+            <span class="provider-badge badge-local">100% Offline</span>
+          </div>
+          <h3 class="card-title">Local LLM Engines</h3>
+          <p class="card-desc">
+            Connect directly to Ollama, LM Studio, or Llama.cpp running on your local workstation.
+          </p>
+          <div class="model-pill-list">
+            <span class="model-tag">llama3</span>
+            <span class="model-tag">qwen2.5-coder</span>
+            <span class="model-tag">mistral</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section: CLI Manual & Commands -->
+  <section class="section" id="cli">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">CLI Reference</span>
+        <h2 class="section-title">Command-Line Interface</h2>
+        <p class="section-desc">
+          Pontis provides a powerful terminal utility for credential management, agent installation, and interactive launches.
+        </p>
+      </div>
+
+      <div class="reference-table-wrap">
+        <table class="ref-table">
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th>Description</th>
+              <th>Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>pontis</code></td>
+              <td>Interactive wizard with 1-Click Fast Launch and keyboard navigation (<kbd>Tab</kbd>/<kbd>↑↓</kbd>)</td>
+              <td><code>pontis</code></td>
+            </tr>
+            <tr>
+              <td><code>pontis claude</code></td>
+              <td>Start proxy and launch Claude Code with auto-approved keys in <code>~/.claude.json</code></td>
+              <td><code>pontis claude</code></td>
+            </tr>
+            <tr>
+              <td><code>pontis codex</code></td>
+              <td>Start proxy and launch Codex CLI via Responses API translation</td>
+              <td><code>pontis codex</code></td>
+            </tr>
+            <tr>
+              <td><code>pontis hermes</code></td>
+              <td>Start proxy and launch Hermes Agent with OpenAI compatibility endpoints</td>
+              <td><code>pontis hermes</code></td>
+            </tr>
+            <tr>
+              <td><code>pontis opencode</code></td>
+              <td>Start proxy and launch OpenCode agent bridged to selected models</td>
+              <td><code>pontis opencode</code></td>
+            </tr>
+            <tr>
+              <td><code>pontis auth set &lt;provider&gt;</code></td>
+              <td>Save encrypted credentials into AES-256-GCM vault (<code>google</code>, <code>opencode</code>, <code>cloudflare</code>)</td>
+              <td><code>pontis auth set google</code></td>
+            </tr>
+            <tr>
+              <td><code>pontis models -p &lt;provider&gt;</code></td>
+              <td>List and interactively pick available models for any provider</td>
+              <td><code>pontis models -p google</code></td>
+            </tr>
+            <tr>
+              <td><code>pontis clients</code></td>
+              <td>View installed agent CLIs, versions, and install missing tools</td>
+              <td><code>pontis install claude</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Section: FAQ -->
+  <section class="section" id="faq">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag">FAQ</span>
+        <h2 class="section-title">Frequently Asked Questions</h2>
+      </div>
+
+      <div class="faq-list">
+        <div class="faq-item">
+          <button class="faq-trigger" onclick="toggleFaq(this)">
+            <span>How does Pontis translate Anthropic and OpenAI protocols?</span>
+            <span class="faq-icon">+</span>
+          </button>
+          <div class="faq-content">
+            Pontis translates Anthropic Messages format (<code>/v1/messages</code>) into OpenAI Chat Completions (<code>/v1/chat/completions</code>), OpenAI Responses API (<code>/v1/responses</code>) for Codex, and SSE event streams on the fly. Tool calls, thinking tags, and streaming tokens are preserved bidirectionally.
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <button class="faq-trigger" onclick="toggleFaq(this)">
+            <span>Are Google Gemini and OpenCode models really free?</span>
+            <span class="faq-icon">+</span>
+          </button>
+          <div class="faq-content">
+            Yes! Google AI Studio provides free API keys with generous rate limits for <code>gemini-2.5-flash</code>, <code>gemini-2.5-pro</code>, and <code>gemma</code> models. OpenCode provides free cloud models including <code>deepseek-v4-flash-free</code>, <code>nemotron-3.5-lightning-free</code>, and <code>mimo-v2.5-free</code>.
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <button class="faq-trigger" onclick="toggleFaq(this)">
+            <span>Where are my API credentials stored?</span>
+            <span class="faq-icon">+</span>
+          </button>
+          <div class="faq-content">
+            Credentials are encrypted using AES-256-GCM and stored in <code>~/.pontis/credentials.enc</code> with file permission <code>0o600</code>. Decryption keys are isolated in <code>~/.pontis/.secret</code> and never logged or exposed.
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <button class="faq-trigger" onclick="toggleFaq(this)">
+            <span>Can I use Pontis completely offline?</span>
+            <span class="faq-icon">+</span>
+          </button>
+          <div class="faq-content">
+            Yes! Set your provider to <code>local</code> (<code>pontis config set provider local</code>) pointing to your local Ollama (<code>http://localhost:11434/v1</code>) or LM Studio server. Pontis works with 100% offline local inference.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-inner">
+        <div>
+          <strong>Pontis AI Gateway</strong> — Universal CLI Runtime Bridge. MIT Licensed.
+        </div>
+        <div style="display: flex; gap: 20px;">
+          <a href="#architecture">Architecture</a>
+          <a href="#sandbox">Sandbox</a>
+          <a href="#cli">CLI Manual</a>
+          <a href="https://github.com/khrees/pontis" target="_blank" rel="noreferrer">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Interactive JavaScript Logic -->
+  <script>
+    // 1. Copy Install Command
+    function copyInstallCmd(btn) {
+      navigator.clipboard.writeText("curl -fsSL https://pontis.khrees.com/install.sh | bash");
+      const original = btn.textContent;
+      btn.textContent = "Copied!";
+      btn.style.color = "#34d399";
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.style.color = "";
+      }, 2000);
+    }
+
+    // 2. Terminal Tab Switcher
+    const terminalDemos = {
+      claude: [
+        '<div class="t-line"><span class="t-prompt">$</span> <span class="t-cmd">pontis claude</span></div>',
+        '<div class="t-line t-dim">  ◆ Pontis Gateway v1.1.0</div>',
+        '<div class="t-line t-green">  ✓ Auto-approved key in ~/.claude.json</div>',
+        '<div class="t-line t-green">  ✓ Translating /v1/messages → Google Gemini (gemini-2.5-flash)</div>',
+        '<div class="t-line"><span class="t-cyan">  · Spawning: claude</span></div>',
+        '<div class="t-line t-purple">  Claude Code is ready. How can I help you today?</div>'
+      ],
+      codex: [
+        '<div class="t-line"><span class="t-prompt">$</span> <span class="t-cmd">pontis codex</span></div>',
+        '<div class="t-line t-dim">  ◆ Pontis Gateway v1.1.0</div>',
+        '<div class="t-line t-green">  ✓ Responses API bridge active on /v1/responses</div>',
+        '<div class="t-line"><span class="t-cyan">  · Spawning: codex --profile pontis</span></div>',
+        '<div class="t-line t-purple">  Codex CLI connected to Pontis. Streaming responses...</div>'
+      ],
+      hermes: [
+        '<div class="t-line"><span class="t-prompt">$</span> <span class="t-cmd">pontis hermes</span></div>',
+        '<div class="t-line t-dim">  ◆ Pontis Gateway v1.1.0</div>',
+        '<div class="t-line t-green">  ✓ Configured HERMES_API_BASE=http://localhost:8787/v1</div>',
+        '<div class="t-line"><span class="t-cyan">  · Spawning: hermes --model gemini-2.5-flash</span></div>',
+        '<div class="t-line t-purple">  Hermes Agent v0.4 initialized. Ready.</div>'
+      ]
+    };
+
+    function switchTerminalTab(client, btn) {
+      document.querySelectorAll('.terminal-tabs .t-tab').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      const screen = document.getElementById('terminal-screen');
+      screen.innerHTML = (terminalDemos[client] || terminalDemos.claude).join('');
+    }
+
+    // 3. Sandbox Interactive Generator
+    let currentAgent = 'claude';
+    let currentProvider = 'google';
+
+    const providerModels = {
+      google: [
+        { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash (Fast & Free)' },
+        { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro (Reasoning)' },
+        { id: 'gemma-2-27b-it', label: 'gemma-2-27b-it' }
+      ],
+      opencode: [
+        { id: 'deepseek-v4-flash-free', label: 'deepseek-v4-flash-free' },
+        { id: 'nemotron-3.5-lightning-free', label: 'nemotron-3.5-lightning-free' },
+        { id: 'mimo-v2.5-free', label: 'mimo-v2.5-free' },
+        { id: 'qwen3.6-plus', label: 'qwen3.6-plus' }
+      ],
+      cloudflare: [
+        { id: '@cf/moonshotai/kimi-k2.6', label: '@cf/moonshotai/kimi-k2.6' },
+        { id: '@cf/meta/llama-3.3-70b-instruct', label: '@cf/meta/llama-3.3-70b-instruct' }
+      ],
+      local: [
+        { id: 'llama3', label: 'llama3 (Ollama / Local)' },
+        { id: 'qwen2.5-coder', label: 'qwen2.5-coder' },
+        { id: 'mistral', label: 'mistral' }
+      ]
+    };
+
+    function setSandboxAgent(agent, btn) {
+      document.querySelectorAll('.select-pill-group .pill-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentAgent = agent;
+      updateSandboxCode();
+    }
+
+    function onSandboxProviderChange(provider) {
+      currentProvider = provider;
+      const modelSelect = document.getElementById('sandbox-model-select');
+      const models = providerModels[provider] || providerModels.google;
+      modelSelect.innerHTML = models.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
+      updateSandboxCode();
+    }
+
+    function updateSandboxCode() {
+      const model = document.getElementById('sandbox-model-select').value;
+      const cliCmd = `pontis ${currentAgent} --provider ${currentProvider} --model ${model}`;
+      const configCmd = `pontis config set provider ${currentProvider}\npontis config set model ${model}\npontis ${currentAgent}`;
+      
+      let envCmd = `export OPENAI_BASE_URL="http://localhost:8787/v1"`;
+      if (currentAgent === 'claude') {
+        envCmd = `export ANTHROPIC_BASE_URL="http://localhost:8787"`;
+      } else if (currentAgent === 'hermes') {
+        envCmd = `export HERMES_API_BASE="http://localhost:8787/v1"\nexport HERMES_MODEL="${model}"`;
+      }
+
+      document.getElementById('sandbox-cli-cmd').textContent = cliCmd;
+      document.getElementById('sandbox-config-cmd').textContent = configCmd;
+      document.getElementById('sandbox-env-cmd').textContent = envCmd;
+    }
+
+    // 4. FAQ Accordion Toggle
+    function toggleFaq(btn) {
+      const item = btn.parentElement;
+      item.classList.toggle('open');
+    }
+  </script>
+</body>
+</html>

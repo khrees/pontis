@@ -4,12 +4,13 @@ import {
   AnthropicResponse,
   AnthropicContentBlock
 } from '../../types';
+import { isString, isObject } from '../../type-guards';
 
 function parseToolArguments(value: string | undefined): Record<string, unknown> {
   if (!value) return {};
   try {
     const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    return isObject(parsed) && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -26,10 +27,13 @@ export function formatOpenAIToAnthropic(completion: OpenAIResponse, model: strin
   }
 
   if (message?.content) {
-    if (typeof message.content === "string") {
+    if (isString(message.content)) {
       content.push({ text: message.content, type: "text" });
     } else if (Array.isArray(message.content)) {
-      content.push({ text: message.content.map(p => p.type === "text" ? p.text : "").join(""), type: "text" });
+      const textContent = message.content
+        .map(p => (p.type === "text" && isString(p.text) ? p.text : ""))
+        .join("");
+      content.push({ text: textContent, type: "text" });
     }
   }
 
@@ -45,9 +49,11 @@ export function formatOpenAIToAnthropic(completion: OpenAIResponse, model: strin
   // Map OpenAI finish_reason to Anthropic stop_reason
   const finishReason = completion.choices?.[0]?.finish_reason;
   let stopReason: AnthropicResponse["stop_reason"] = "end_turn";
-  if (finishReason === "tool_calls") stopReason = "tool_use";
-  else if (finishReason === "length") stopReason = "max_tokens";
-  else if (finishReason === "stop") stopReason = "end_turn";
+  if (finishReason === "tool_calls") {
+    stopReason = "tool_use";
+  } else if (finishReason === "length") {
+    stopReason = "max_tokens";
+  }
 
   const result: AnthropicResponse = {
     id: messageId,

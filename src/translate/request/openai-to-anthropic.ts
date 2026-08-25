@@ -1,6 +1,3 @@
-/**
- * Converts OpenAI Chat Completions request to Anthropic Messages request.
- */
 import {
   OpenAIRequest,
   OpenAIMessage,

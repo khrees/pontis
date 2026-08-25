@@ -1,6 +1,3 @@
-/**
- * Converts Anthropic Messages streaming SSE to OpenAI Chat Completions streaming SSE.
- */
 import { OpenAIMessage } from '../../types';
 import { warnLog } from '../../logger';
 
@@ -31,6 +28,20 @@ interface AnthropicSSEEvent {
   };
 }
 
+// Streaming tool_call deltas are partial per the OpenAI chunk shape: the first
+// delta for a call carries index + id + type + name; subsequent argument deltas
+// carry only index + function.arguments. OpenAI SDKs group deltas by `index`.
+interface OpenAIStreamToolCallDelta {
+  index: number;
+  id?: string;
+  type?: "function";
+  function?: { name?: string; arguments?: string };
+}
+
+type StreamDelta = Partial<Omit<OpenAIMessage, "tool_calls">> & {
+  tool_calls?: OpenAIStreamToolCallDelta[];
+};
+
 export function streamAnthropicToOpenAI(anthropicStream: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> {
   const chatId = "chatcmpl-" + Math.floor(Date.now() / 1000);
 
@@ -44,11 +55,14 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream<Uint8Arr
       const decoder = new TextDecoder();
       let buffer = "";
 
-      // Tool call tracking: index → { id, name, args }
-      const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
+      // Tool call tracking: Anthropic content-block index → tool call.
+      // `index` is the OpenAI tool_calls index (0-based among tool calls only),
+      // which is what OpenAI SDKs use to assemble parallel tool calls.
+      const toolCallMap = new Map<number, { id: string; name: string; args: string; index: number }>();
       let contentBlockIndex = -1;
+      let toolCallCount = 0;
 
-      function emitChunk(delta: Partial<OpenAIMessage>, finishReason?: string) {
+      function emitChunk(delta: StreamDelta, finishReason?: string) {
         const chunk: Record<string, unknown> = {
           id: chatId,
           object: "chat.completion.chunk",
@@ -78,6 +92,7 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream<Uint8Arr
             case "message_start":
               contentBlockIndex = -1;
               toolCallMap.clear();
+              toolCallCount = 0;
               break;
 
             case "content_block_start": {
@@ -87,11 +102,13 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream<Uint8Arr
               }
 
               if (block?.type === "tool_use") {
-                // Emit the initial tool_call chunk with id, name, empty args
+                // First delta for this call: carry index + id + type + name.
                 const tcId = block.id || `call_${Date.now()}`;
-                toolCallMap.set(contentBlockIndex, { id: tcId, name: block.name || "", args: "" });
+                const oaiIndex = toolCallCount++;
+                toolCallMap.set(contentBlockIndex, { id: tcId, name: block.name || "", args: "", index: oaiIndex });
                 emitChunk({
                   tool_calls: [{
+                    index: oaiIndex,
                     id: tcId,
                     type: "function" as const,
                     function: { name: block.name || "", arguments: "" },
@@ -108,14 +125,14 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream<Uint8Arr
               } else if (delta?.type === "thinking_delta") {
                 emitChunk({ reasoning_content: delta.thinking || "" });
               } else if (delta?.type === "input_json_delta") {
-                // Accumulate and emit tool call argument deltas
+                // Subsequent argument deltas: carry only index + arguments
+                // (id/type/name were sent on the first delta).
                 const tc = toolCallMap.get(contentBlockIndex);
                 if (tc) {
                   tc.args += delta.partial_json || "";
                   emitChunk({
                     tool_calls: [{
-                      id: tc.id,
-                      type: "function" as const,
+                      index: tc.index,
                       function: { arguments: delta.partial_json || "" },
                     }],
                   });

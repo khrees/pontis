@@ -1,11 +1,34 @@
-declare const process: { env?: Record<string, string | undefined> };
-
+import {
+  getProvider,
+  getModel,
+  getUpstreamUrl,
+  getUpstreamFormat,
+  isCodexMode,
+  getGoUpstream,
+  getZenUpstream,
+  getEnv,
+} from "./env";
 import { extractApiKey, validateApiKey } from "./auth";
+import { InvalidApiKeyError } from "./errors";
+import { isFreeOpenCodeModel } from "./opencode-models";
 
-export const GO_UPSTREAM = "https://opencode.ai/zen/go/v1";
-export const ZEN_UPSTREAM = "https://opencode.ai/zen/v1";
+export const GO_UPSTREAM = getGoUpstream("https://opencode.ai/zen/go/v1");
+export const ZEN_UPSTREAM = getZenUpstream("https://opencode.ai/zen/v1");
+export const GOOGLE_DEFAULT_UPSTREAM = "https://generativelanguage.googleapis.com/v1beta/openai";
 export const DEFAULT_UPSTREAM = GO_UPSTREAM;
 export const VISION_MODEL = "qwen3.6-plus";
+
+export function getVisionModel(): string {
+  const custom = getEnv("PONTIS_VISION_MODEL");
+  if (custom) return custom;
+  if (getProvider() === "cloudflare") {
+    return "@cf/meta/llama-3.2-11b-vision-instruct";
+  }
+  if (getProvider() === "google") {
+    return "gemini-3.6-flash";
+  }
+  return VISION_MODEL;
+}
 
 const API_START_PATHS = new Set(["v1", "v2"]);
 
@@ -24,20 +47,13 @@ const KNOWN_OPENCODE_PREFIXES = [
   "command",
   "minimax",
   "north",
-];
-
-const PAID_TO_FREE: Record<string, string> = {
-  "deepseek-v4-flash": "deepseek-v4-flash-free",
-  "mimo-v2.5": "mimo-v2.5-free",
-  "nemotron-3-ultra": "nemotron-3-ultra-free",
-  "north-mini-code": "north-mini-code-free",
-};
-
-const PREFIX_TO_FREE: [string, string][] = [
-  ["deepseek", "deepseek-v4-flash-free"],
-  ["mimo", "mimo-v2.5-free"],
-  ["nemotron", "nemotron-3-ultra-free"],
-  ["north", "north-mini-code-free"],
+  "grok",
+  "kimi",
+  "glm",
+  "hy3",
+  "laguna",
+  "muse",
+  "ox",
 ];
 
 export type RouteConfig = {
@@ -47,7 +63,18 @@ export type RouteConfig = {
 };
 
 export function getDefaultFreeModel(): string {
-  return process?.env?.PONTIS_MODEL || "mimo-v2.5-free";
+  const model = getModel();
+  if (model) return model;
+  if (getProvider() === "cloudflare") {
+    return "@cf/moonshotai/kimi-k2.6";
+  }
+  if (getProvider() === "local") {
+    return "llama3";
+  }
+  if (getProvider() === "google") {
+    return "gemini-3.6-flash";
+  }
+  return "mimo-v2.5-free";
 }
 
 export function resolveModel(model: string): string {
@@ -55,14 +82,13 @@ export function resolveModel(model: string): string {
   if (!model) return defaultFreeModel;
 
   const lower = model.toLowerCase();
-  if (PAID_TO_FREE[lower]) return PAID_TO_FREE[lower];
-
-  for (const [prefix, freeModel] of PREFIX_TO_FREE) {
-    if (lower.startsWith(prefix) && !lower.endsWith("-free")) {
-      return freeModel;
-    }
+  if (lower.startsWith("@cf/") || lower.startsWith("gemini-") || lower.startsWith("gemma-")) {
+    return model;
   }
 
+  // Known OpenCode model prefixes — pass through unchanged regardless of -free suffix.
+  // The upstream decides access based on the API key tier; we must not downgrade paid
+  // model IDs (e.g. deepseek-v4-flash) to free equivalents (deepseek-v4-flash-free).
   if (KNOWN_OPENCODE_PREFIXES.some((p) => lower.startsWith(p))) return model;
 
   if (
@@ -110,21 +136,19 @@ export function routeConfig(request: Request): RouteConfig {
   }
 
   const { path: remaining, model } = extractModelSegment(path);
-  return { path: remaining, upstream: DEFAULT_UPSTREAM, modelOverride: model };
+  const defaultUp = getProvider() === "google" ? GOOGLE_DEFAULT_UPSTREAM : DEFAULT_UPSTREAM;
+  return { path: remaining, upstream: defaultUp, modelOverride: model };
 }
 
 export function getUpstream(routeUpstream: string): string {
-  return (
-    process?.env?.PONTIS_UPSTREAM_URL ||
-    routeUpstream
-  );
+  const target = getUpstreamUrl();
+  if (target) return target;
+  if (getProvider() === "google") return GOOGLE_DEFAULT_UPSTREAM;
+  return routeUpstream;
 }
 
 export function upstreamFormat(): "openai" | "anthropic" | "openai-completions" {
-  const fmt = (
-    process?.env?.PONTIS_UPSTREAM_FORMAT ||
-    "openai"
-  ).toLowerCase();
+  const fmt = getUpstreamFormat();
 
   if (
     fmt === "openai-completions" ||
@@ -141,14 +165,20 @@ export function selectUpstream(
   routeUpstream: string,
   model: string,
 ): string {
-  const targetUpstream = process?.env?.PONTIS_UPSTREAM_URL;
+  const targetUpstream = getUpstreamUrl();
   if (targetUpstream) return targetUpstream;
 
+  const provider = getProvider();
+  if (provider === "google") {
+    return GOOGLE_DEFAULT_UPSTREAM;
+  }
+
   const path = new URL(request.url).pathname;
-  const hasExplicitPrefix = path.startsWith("/go") || path.startsWith("/zen");
-  if (!hasExplicitPrefix && routeUpstream.includes("opencode.ai")) {
-    const isFree = model.endsWith("-free") || model === "big-pickle";
-    return isFree ? ZEN_UPSTREAM : GO_UPSTREAM;
+  if (path.startsWith("/go")) return GO_UPSTREAM;
+  if (path.startsWith("/zen")) return ZEN_UPSTREAM;
+
+  if (routeUpstream.includes("opencode.ai")) {
+    return isFreeOpenCodeModel(model) ? ZEN_UPSTREAM : GO_UPSTREAM;
   }
   return routeUpstream;
 }
@@ -171,13 +201,9 @@ export function isCodexClient(request: Request, url: URL): boolean {
     url.searchParams.has("client_version") ||
     (request.headers.get("user-agent") || "").toLowerCase().includes("codex") ||
     (request.headers.get("user-agent") || "").toLowerCase().includes("openai") ||
-    process?.env?.PONTIS_CODEX_MODE === "true"
+    isCodexMode()
   );
 }
-
-// ──────────────────────────────────────────────
-//  Model resolution helpers (used by index.ts)
-// ──────────────────────────────────────────────
 
 export interface ResolvedModel {
   model: string;
@@ -185,7 +211,6 @@ export interface ResolvedModel {
   authErr: ReturnType<typeof import("./auth").validateApiKey>;
 }
 
-/** Check if an Anthropic request body contains image content blocks. */
 export function requestHasImages(messages: { content?: unknown }[] | undefined): boolean {
   return (messages || []).some(
     (msg) =>
@@ -194,7 +219,6 @@ export function requestHasImages(messages: { content?: unknown }[] | undefined):
   );
 }
 
-/** Resolve model + upstream + auth for a request, applying vision fallback for OpenCode. */
 export function resolveModelAndUpstream(
   request: Request,
   routeUpstream: string,
@@ -204,15 +228,27 @@ export function resolveModelAndUpstream(
   const key = extractApiKey(request.headers);
   let resolvedModel = model;
   const baseUpstream = getUpstream(routeUpstream);
+  const provider = getProvider();
+  const isGoogle = provider === "google" || baseUpstream.includes("googleapis.com");
+  const isCloudflare = provider === "cloudflare" || baseUpstream.includes("gateway.ai.cloudflare.com");
+  const isLocal = provider === "local" || baseUpstream.includes("localhost") || baseUpstream.includes("127.0.0.1");
+  const isOpencode = !isGoogle && !isCloudflare && !isLocal && (provider === "opencode" || baseUpstream.includes("opencode.ai"));
 
-  if (baseUpstream.includes("opencode.ai")) {
+  if (isOpencode || isCloudflare || isGoogle) {
     resolvedModel = resolveModel(resolvedModel);
     if (options?.hasVision) {
-      resolvedModel = VISION_MODEL;
+      resolvedModel = getVisionModel();
     }
   }
 
   const upstream = selectUpstream(request, routeUpstream, resolvedModel);
-  const authErr = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
+  let authErr = null;
+  if (isOpencode) {
+    authErr = validateApiKey(key);
+  } else if (isCloudflare || isGoogle) {
+    if (!key) {
+      throw new InvalidApiKeyError("Missing API key. Provide x-api-key or Authorization header.");
+    }
+  }
   return { model: resolvedModel, upstream, authErr };
 }

@@ -4,6 +4,7 @@ import {
   assistantMessageFromOutputItems,
 } from "../assistant-message";
 import { getUpstream, resolveModel, selectUpstream } from "../config";
+import { getModel } from "../env";
 import { fetchWithTimeout, jsonResponse, openaiAuthHeaders, SSE_HEADERS, upstreamErrorResponse, wrapProxyRequest } from "../http";
 import { debugLog, warnLog } from "../logger";
 import { responseCache } from "../responses-cache";
@@ -67,14 +68,44 @@ export async function handleResponsesRequest(
   reqId: string,
 ): Promise<Response> {
   return wrapProxyRequest(reqId, async () => {
-    const key = extractApiKey(request.headers);
+    const requestKey = extractApiKey(request.headers);
+
+    // Codex sends its stored OPENAI_API_KEY (sk-...) when routing through
+    // OPENAI_BASE_URL, or may send no key at all when switching to a native
+    // GPT/o-series model mid-session. In either case, substitute the proxy's
+    // own API key so the real upstream accepts the request.
+    // This is safe because the server only binds to loopback.
+    let key = requestKey;
+    if (!key || (key.startsWith("sk-") && process.env.OPENAI_API_KEY)) {
+      key = process.env.PONTIS_API_KEY || process.env.OPENAI_API_KEY || requestKey;
+    }
+
     const req = (await request.json()) as ResponsesApiRequest;
     const originalModel = req.model || "gpt-5.4-mini";
 
+    // Strip provider prefix from model name (e.g. "pontis/hy3-free" → "hy3-free")
+    // Codex passes the model as <provider>/<model> when using a custom model_provider.
     let resolvedModel = originalModel;
+    const slashIdx = resolvedModel.lastIndexOf("/");
+    if (slashIdx > 0) {
+      resolvedModel = resolvedModel.slice(slashIdx + 1);
+    }
     const baseUpstream = getUpstream(routeUpstream);
     if (baseUpstream.includes("opencode.ai")) {
       resolvedModel = resolveModel(resolvedModel);
+    } else {
+      const lower = resolvedModel.toLowerCase();
+      if (
+        lower.startsWith("gpt-") ||
+        lower.startsWith("o1") ||
+        lower.startsWith("o3") ||
+        lower.startsWith("claude-")
+      ) {
+        const configuredModel = getModel();
+        if (configuredModel) {
+          resolvedModel = configuredModel;
+        }
+      }
     }
     req.model = resolvedModel;
 

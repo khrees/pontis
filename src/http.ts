@@ -1,6 +1,10 @@
-declare const process: { env?: Record<string, string | undefined> };
-
 import { warnLog } from "./logger";
+import { getTimeoutMs } from "./env";
+import {
+  UpstreamTimeoutError,
+  UpstreamConnectionError,
+  errorToResponse,
+} from "./errors";
 
 export const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -18,27 +22,15 @@ const PASSTHROUGH_ERROR_HEADERS = [
 
 let requestCounter = 0;
 
-/** Generate a short, human-readable request ID for tracing. */
 export function generateRequestId(): string {
   return `req_${Date.now().toString(36)}_${(++requestCounter % 65536).toString(36)}`;
 }
 
-/** Read an env var with a fallback. */
-function getEnv(name: string, fallback = ""): string {
-  return process?.env?.[name] || fallback;
-}
-
-/**
- * Fetch with a configurable timeout.
- *
- * Defaults to 120s. Override via `PONTIS_TIMEOUT_MS` env var or the `timeout` option.
- * Composes with any caller-provided AbortSignal.
- */
 export async function fetchWithTimeout(
   url: string,
   options: RequestInit & { timeout?: number } = {},
 ): Promise<Response> {
-  const timeoutMs = options.timeout ?? parseInt(getEnv("PONTIS_TIMEOUT_MS", "120000"), 10);
+  const timeoutMs = options.timeout ?? getTimeoutMs(120000);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -57,6 +49,14 @@ export async function fetchWithTimeout(
 
   try {
     return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new UpstreamTimeoutError(timeoutMs);
+    }
+    throw new UpstreamConnectionError(
+      error instanceof Error ? error.message : "Unknown connection error"
+    );
   } finally {
     clearTimeout(timeoutId);
   }
@@ -84,45 +84,6 @@ export function openaiAuthHeaders(key: string | null): Record<string, string> {
   };
 }
 
-export interface ProxyError {
-  proxy_error: {
-    type: string;
-    message: string;
-    request_id?: string;
-    upstream_status?: number;
-    upstream_body?: string;
-  };
-}
-
-function makeProxyError(
-  type: string,
-  message: string,
-  requestId?: string,
-  upstreamStatus?: number,
-  upstreamBody?: string,
-): ProxyError {
-  return {
-    proxy_error: {
-      type,
-      message,
-      ...(requestId ? { request_id: requestId } : {}),
-      ...(upstreamStatus ? { upstream_status: upstreamStatus } : {}),
-      ...(upstreamBody ? { upstream_body: upstreamBody } : {}),
-    },
-  };
-}
-
-/** Response for when the proxy itself fails (timeout, network error, etc.). */
-export function proxyErrorResponse(
-  type: string,
-  message: string,
-  opts?: { requestId?: string; upstreamStatus?: number; upstreamBody?: string; status?: number },
-): Response {
-  const status = opts?.status || 502;
-  return jsonResponse(makeProxyError(type, message, opts?.requestId, opts?.upstreamStatus, opts?.upstreamBody), status);
-}
-
-/** Pass through an upstream error response, preserving relevant headers. */
 export function upstreamErrorResponse(
   res: Response,
   body: string,
@@ -134,13 +95,11 @@ export function upstreamErrorResponse(
     if (value) headers.set(name, value);
   }
   if (requestId) headers.set("X-Request-Id", requestId);
-  // Always return JSON to prevent reflected XSS from HTML error pages
   headers.set("Content-Type", "application/json");
   let safeBody = body;
   try {
-    JSON.parse(body); // validate it's already JSON
+    JSON.parse(body);
   } catch {
-    // Wrap non-JSON error bodies to prevent XSS
     safeBody = JSON.stringify({
       error: { type: "upstream_error", message: body.slice(0, 2000) },
     });
@@ -155,10 +114,6 @@ export function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/**
- * Wraps a proxy request handler with standard error handling.
- * Catches AbortError (timeout) and generic errors, returning appropriate error responses.
- */
 export async function wrapProxyRequest(
   reqId: string,
   handler: () => Promise<Response>,
@@ -166,19 +121,11 @@ export async function wrapProxyRequest(
   try {
     return await handler();
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
-      warnLog(`[${reqId}] Upstream request timed out`);
-      return proxyErrorResponse("upstream_timeout", "Upstream did not respond in time", { requestId: reqId });
-    }
     warnLog(`[${reqId}] Request failed: ${err instanceof Error ? err.message : String(err)}`);
-    return proxyErrorResponse("proxy_error", err instanceof Error ? err.message : String(err), { requestId: reqId });
+    return errorToResponse(err, reqId);
   }
 }
 
-/**
- * Build a passthrough response preserving key headers from the upstream.
- * Used when no format translation is needed (same-format proxying).
- */
 export function passthroughResponse(res: Response): Response {
   const headers: Record<string, string> = {
     "Content-Type": res.headers.get("Content-Type") || "application/json",

@@ -1,0 +1,244 @@
+import { spawn, execSync } from "node:child_process";
+import { createServer as createNetServer } from "node:net";
+import { existsSync, readdirSync, statSync, mkdirSync, createWriteStream } from "node:fs";
+import { join } from "node:path";
+import { createSpinner, t, badge } from "./ui";
+import { DIST_PROXY, SRC_DIR, ROOT, PONTIS_DIR, PROXY_LOG } from "./config";
+import { getPort } from "../env";
+
+export let PORT = getPort(8787);
+export let PROXY_URL = `http://localhost:${PORT}`;
+
+export function getActivePort(): number {
+  return PORT;
+}
+
+export function getActiveProxyUrl(): string {
+  return PROXY_URL;
+}
+
+/** Check if a local TCP port is free to bind. */
+export async function isPortAvailable(port: number, host = "127.0.0.1"): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createNetServer();
+    server.once("error", () => resolve(false));
+    server.once("listening", () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, host);
+  });
+}
+
+/** Find the first free local port starting from `startPort`. */
+export async function findAvailablePort(startPort: number, host = "127.0.0.1", maxAttempts = 50): Promise<number> {
+  for (let p = startPort; p < startPort + maxAttempts; p++) {
+    if (await isPortAvailable(p, host)) {
+      return p;
+    }
+  }
+  return startPort;
+}
+
+export interface ProxyInstance {
+  pid: number;
+  port: number;
+  proxyUrl: string;
+}
+
+/** Tracked proxy instance for this process so SIGINT/SIGTERM can clean it up. */
+export let activeProxy: ProxyInstance | null = null;
+
+export function setActiveProxy(proxy: ProxyInstance | null) {
+  activeProxy = proxy;
+}
+
+export function killActiveProxy() {
+  if (activeProxy) {
+    try {
+      process.kill(activeProxy.pid, "SIGTERM");
+    } catch {}
+    activeProxy = null;
+  }
+}
+
+/** Register a one-shot shutdown handler. */
+export function onShutdown(handler: () => void) {
+  const done = () => {
+    handler();
+    process.exit(0);
+  };
+  process.on("SIGINT", done);
+  process.on("SIGTERM", done);
+}
+
+export function needsProxyRebuild(): boolean {
+  if (!existsSync(SRC_DIR)) return false;
+  if (!existsSync(DIST_PROXY)) return true;
+  try {
+    const distMtime = statSync(DIST_PROXY).mtimeMs;
+    const entries = readdirSync(SRC_DIR, { recursive: true });
+    for (const entry of entries) {
+      const name = typeof entry === "string" ? entry : String(entry);
+      if (name.endsWith(".ts")) {
+        if (statSync(join(SRC_DIR, name)).mtimeMs > distMtime) return true;
+      }
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+export function buildProxy() {
+  const spin = createSpinner("Building proxy bundle...");
+  try {
+    if (!existsSync(join(ROOT, "node_modules"))) {
+      spin.update("Installing dependencies...");
+      execSync("npm install --silent", { cwd: ROOT, stdio: "ignore" });
+    }
+    spin.update("Compiling TypeScript...");
+    execSync("npm run build:proxy", { cwd: ROOT, stdio: "ignore" });
+    spin.stop({ type: "success", text: "Proxy bundle ready" });
+  } catch {
+    spin.stop({ type: "warning", text: "Using tsx source mode (no build)" });
+  }
+}
+
+export function findNativeBinary(): string | null {
+  for (const p of [
+    join(ROOT, "bin", "pontis-proxy"),
+    join(ROOT, "pontis-proxy"),
+  ]) {
+    if (existsSync(p)) return p;
+  }
+  if (!existsSync(SRC_DIR)) {
+    try {
+      const resolved = execSync("which pontis-proxy 2>/dev/null || true")
+        .toString()
+        .trim();
+      if (resolved && existsSync(resolved)) return resolved;
+    } catch {}
+  }
+  return null;
+}
+
+export async function startProxy(model: string, codexMode: boolean): Promise<ProxyInstance> {
+  // Determine port: if explicit PONTIS_PORT is set, use it; otherwise find an available port starting at 8787
+  let targetPort = getPort(8787);
+  const explicitPort = process.env.PONTIS_PORT;
+
+  if (!explicitPort) {
+    targetPort = await findAvailablePort(8787);
+  } else {
+    // Explicit port requested and occupied: free it gracefully, then VERIFY it
+    // actually freed — otherwise the readiness probe would accept the
+    // still-running stale proxy (old model/provider) as "ready".
+    const available = await isPortAvailable(targetPort);
+    if (!available) {
+      let killed = 0;
+      try {
+        const existing = execSync(`lsof -t -i :${targetPort} 2>/dev/null || true`)
+          .toString()
+          .trim();
+        if (existing && /^\d+(\s+\d+)*$/.test(existing)) {
+          for (const pid of existing.split(/\s+/)) {
+            try {
+              process.kill(parseInt(pid, 10), "SIGTERM");
+              killed++;
+            } catch {}
+          }
+          await new Promise((r) => setTimeout(r, 400));
+        }
+      } catch {}
+      if (killed > 0) {
+        badge("muted", `Stopped existing process on port ${targetPort} (${killed} pid${killed === 1 ? "" : "s"})`);
+      }
+      if (!(await isPortAvailable(targetPort))) {
+        badge("error", `Port ${targetPort} is still in use and could not be freed.`);
+        console.log(`  ${t.muted(`Stop it (lsof -i :${targetPort}) or set a different PONTIS_PORT.`)}`);
+        process.exit(1);
+      }
+    }
+  }
+
+  PORT = targetPort;
+  PROXY_URL = `http://localhost:${targetPort}`;
+  process.env.PONTIS_PORT = String(targetPort);
+
+  if (codexMode) {
+    process.env.PONTIS_CODEX_MODE = "true";
+    process.env.PONTIS_TLS_PORT = "8443";
+  }
+  if (!codexMode && process.env.PONTIS_PROVIDER === "local") {
+    process.env.PONTIS_MIN_KEY_LENGTH = "0";
+  }
+
+  // Build if needed
+  if (needsProxyRebuild()) buildProxy();
+
+  const env = { ...process.env, PONTIS_PORT: String(targetPort), PONTIS_MODEL: model };
+  const nativeBin = findNativeBinary();
+  let child;
+
+  const spin = createSpinner(`Starting Pontis proxy on port ${targetPort}...`);
+
+  if (nativeBin) {
+    execSync(`chmod +x "${nativeBin}"`, { stdio: "ignore" });
+    child = spawn(nativeBin, [], { env, stdio: ["ignore", "pipe", "pipe"] });
+  } else if (existsSync(DIST_PROXY)) {
+    child = spawn("node", [DIST_PROXY], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } else {
+    if (!existsSync(join(ROOT, "node_modules"))) {
+      spin.update("Installing dependencies...");
+      execSync("npm install --silent", { cwd: ROOT, stdio: "ignore" });
+    }
+    child = spawn(
+      "npx",
+      ["--no-install", "tsx", join(SRC_DIR, "local-server.ts")],
+      {
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  }
+
+  if (!existsSync(PONTIS_DIR))
+    mkdirSync(PONTIS_DIR, { mode: 0o700, recursive: true });
+  const logStream = createWriteStream(PROXY_LOG, { flags: "a", mode: 0o600 });
+  child.stdout?.pipe(logStream);
+  child.stderr?.pipe(logStream);
+
+  // Wait for ready
+  let attempts = 0;
+  while (true) {
+    attempts++;
+    try {
+      const res = await fetch(PROXY_URL + "/");
+      if (res.ok) break;
+    } catch {}
+    if (attempts >= 120) {
+      spin.stop({
+        type: "error",
+        text: `Proxy failed to start on port ${targetPort} (check ${PROXY_LOG})`,
+      });
+      process.exit(1);
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  activeProxy = { pid: child.pid!, port: targetPort, proxyUrl: PROXY_URL };
+  onShutdown(() => {
+    try {
+      process.kill(activeProxy!.pid, "SIGTERM");
+    } catch {}
+  });
+
+  spin.stop({
+    type: "success",
+    text: `Proxy running on ${t.secondary(PROXY_URL)}`,
+  });
+  return activeProxy;
+}

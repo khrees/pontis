@@ -1,237 +1,304 @@
 # Pontis 🌌
+**Bridge any AI coding agent CLI to any LLM provider — with zero config.**
 
-**Pontis** is a bidirectional translation proxy and local CLI launcher that allows you to run **Claude Code**, **OpenAI Codex CLI**, and other terminal-based AI harnesses using free-tier models on **OpenCode** or **locally installed models** (Ollama, LM Studio, etc.).
-
-It bridges the gap between Anthropic format (`/v1/messages`), OpenAI chat completions (`/v1/chat/completions`), and OpenAI legacy completions (`/v1/completions`), translating requests, responses, and SSE streams on the fly to match the target engine.
-
----
-
-## Features
-
-- **🚀 Direct CLI Installation**: Install globally with a single curl command.
-- **💻 Local Model Engines**: Support for Ollama, LM Studio, Llama.cpp, and custom local endpoints out of the box with zero external API keys required.
-- **✨ Active Model Discovery**: Dynamically scans OpenCode's endpoints or your local model server's `/models` list.
-- **👁️ Auto-Vision Format Translation**: Translates Anthropic base64 and URL image blocks into standard OpenAI `image_url` payloads, enabling image inputs if your chosen upstream engine supports vision processing.
-- **🔑 Auto-Approved API Keys**: Writes key configurations into your `~/.claude.json` to bypass OAuth redirects automatically.
-- **⚙️ OpenAI Completions / Codex Compatibility**: Translates the OpenAI Responses API (used by Codex CLI) to chat completions, including tool calls, tool outputs, and streaming events.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue)](https://github.com/khrees/pontis/blob/main/LICENSE)
+[![Release](https://img.shields.io/github/v/release/khrees/pontis?include_prereleases&color=00f2fe)](https://github.com/khrees/pontis/releases)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/khrees/pontis/release.yml)](https://github.com/khrees/pontis/actions)
 
 ---
 
-## Prerequisites
+Coding harnesses like **Claude Code** and **OpenAI Codex CLI** are built around proprietary cloud models. **Pontis** breaks the lock-in.
 
-Before running Pontis, make sure you have:
-- **Node.js** (v18 or higher) installed on your system.
-- **Claude Code** (optional) installed globally:
-  ```bash
-  npm install -g @anthropic-ai/claude-code
-  ```
-- **Codex CLI** (optional) installed globally:
-  ```bash
-  npm install -g @openai/codex-cli
-  ```
-- **Local Engine** (optional, e.g. Ollama or LM Studio) running locally.
+Pontis is a universal gateway and runtime launcher that translates real-time agent protocols (Anthropic Messages, OpenAI Chat, and Responses API). Run **Claude Code**, **Codex**, **Hermes Agent**, **OpenCode**, or **Pi** against **Google**, **OpenCode**, **Cloudflare Workers AI**, or your **local Ollama / LM Studio models** without touching configuration files.
 
----
-
-## Installation
-
-Install Pontis globally using the install script:
-
-```bash
-curl -fsL https://pontis.khrees.com/install | bash
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                  Coding Agent CLIs (Terminal Harnesses)                │
+│       Claude Code · Codex CLI · Hermes Agent · OpenCode · Pi           │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                         ┌──────────▼──────────┐
+                         │   PONTIS GATEWAY    │  ◄── Real-time Protocol Translation
+                         │  (Local Proxy/CLI)  │      · Tool Calling & Streaming
+                         └──────────┬──────────┘      · Reasoning Tokens & Context
+                                    │                 · Encrypted Credential Vault
+┌───────────────────────────────────┴────────────────────────────────────┐
+│                         LLM Backends & Providers                       │
+│    Google Gemini · OpenCode Zen/Go · Cloudflare · Local                │
+│           (Gemini 2.5, DeepSeek, Kimi, Qwen, Ollama, LM Studio)        │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-This clones Pontis to `~/.pontis`, configures local dependencies, and sets up the global `pontis` command symlink in your `PATH`.
-
 ---
 
-## Quick Start (Interactive Setup)
+## ⚡ 60-Second Quick Start
 
-1. Launch Pontis CLI:
-   ```bash
-   pontis
-   ```
-2. Select your **API Provider**:
-   * **OpenCode (Zen/Go)**: Enter your OpenCode API Key when prompted (get one from [opencode.ai](https://opencode.ai/auth)).
-   * **Local Models**: Choose from Ollama, LM Studio, Llama.cpp, or enter a custom URL.
-3. Select one of the dynamically fetched models available on that provider.
-4. Claude Code will boot up automatically using your chosen model configuration!
+### 1. Install Pontis
 
-### Command Subcommands:
-You can direct Pontis to launch a specific client interface directly:
-
-* **Claude Code**: `pontis claude`
-* **Codex**: `pontis codex`
-* **Standalone Server**: `pontis server` (keeps only the proxy server running on `http://localhost:8787` for external API connections)
-
----
-
-## Codex CLI
-
-Pontis supports [OpenAI's Codex CLI](https://github.com/openai/codex) out of the box. Run:
-
+#### Stable Release (Recommended)
 ```bash
-pontis codex
+curl -fsSL https://pontis.khrees.com/install | bash
 ```
 
-Pontis starts the local proxy, selects your model, and launches Codex pointed at `http://localhost:8787/v1`.
-
-### What Pontis handles
-
-- **Responses API translation** — Converts Codex's `/v1/responses` requests (including `function_call`, `function_call_output`, and message items) into chat completions for OpenCode or local engines.
-- **Model metadata** — Returns per-model context windows, output limits, and tool capabilities via `/v1/models` so Codex configures itself correctly instead of using fallback defaults.
-- **Streaming** — Emits full `response.completed` events with output items and usage data (`stream_options: { include_usage: true }`).
-- **Multi-turn context** — Reconstructs conversation history from Codex's input items and caches state for `previous_response_id` follow-ups.
-
-Known model metadata is provided for: `mimo-v2.5-free`, `deepseek-v4-flash-free`, `big-pickle`, `nemotron-3-ultra-free`, `north-mini-code-free`, and `qwen3.6-plus`. Unknown models receive sensible defaults (128K context, 16K max output tokens).
-
-### Manual setup
-
-To run the proxy and Codex separately:
-
+#### Install with All Agent CLIs
+To install Pontis alongside Claude Code, Codex, Hermes Agent, OpenCode, and Pi in one command:
 ```bash
-# Terminal 1 — start the proxy
-pontis server
-
-# Terminal 2 — launch Codex
-export OPENAI_BASE_URL="http://localhost:8787/v1"
-export OPENAI_API_KEY="your-opencode-api-key"
-codex --model mimo-v2.5-free
+curl -fsSL https://pontis.khrees.com/install | bash -s -- --with-clients
 ```
 
+#### Install Nightly / Pre-release Channel
+To try cutting-edge features and newly supported upstream models:
+```bash
+# Using installer flag
+curl -fsSL https://pontis.khrees.com/install | bash -s -- --nightly
+
+# Or via environment variable
+curl -fsSL https://pontis.khrees.com/install | PONTIS_VERSION=nightly bash
+```
+
+### 2. Launch
+```bash
+pontis
+```
+* **First Launch**: Guided 2-step setup. Choose your provider, paste your key (AES-256 encrypted), and pick your agent.
+* **Subsequent Launches**: Instant **1-Click Quick Launch** (press Enter to run your default stack immediately).
 
 ---
 
-## Environment Configuration
+## 🚀 Direct Agent Launchers
 
-You can fully automate Pontis and bypass interactive prompt configuration by setting environment variables in your terminal:
+Launch your favorite assistant directly with your active configuration:
 
-| Variable | Description | Example |
-|---|---|---|
-| `PONTIS_PROVIDER` | Define provider preset (`opencode` or `local`) | `export PONTIS_PROVIDER="local"` |
-| `PONTIS_MODEL` | Default free model for remapping and Codex launcher | `export PONTIS_MODEL="deepseek-v4-flash-free"` |
-| `PONTIS_UPSTREAM_URL` | Upstream base URL targeting the model engine | `export PONTIS_UPSTREAM_URL="http://localhost:11434/v1"` |
-| `PONTIS_UPSTREAM_FORMAT` | Upstream API format (`openai`, `anthropic`, or `openai-completions`) | `export PONTIS_UPSTREAM_FORMAT="openai"` |
-| `OPENCODE_API_KEY` | OpenCode API credential | `export OPENCODE_API_KEY="sk-..."` |
-| `LOCAL_API_KEY` | Key for local setups (if authentication is required) | `export LOCAL_API_KEY="sk-local-test"` |
-| `PONTIS_DEBUG` | Enable verbose proxy request logging | `export PONTIS_DEBUG=true` |
-| `PONTIS_CODEX_MODE` | Return Codex-format model metadata from `/v1/models` | `export PONTIS_CODEX_MODE=true` |
-| `PONTIS_TIMEOUT_MS` | Upstream request timeout in milliseconds (default 120000) | `export PONTIS_TIMEOUT_MS=30000` |
-| `PONTIS_MIN_KEY_LENGTH` | Minimum API key length check (default 32, set 0 to disable) | `export PONTIS_MIN_KEY_LENGTH=0` |
+```bash
+pontis claude       # Launch Claude Code via Pontis
+pontis codex        # Launch OpenAI Codex CLI via Pontis
+pontis hermes       # Launch Hermes Agent via Pontis
+pontis opencode     # Launch OpenCode via Pontis
+pontis pi           # Launch Pi via Pontis
+pontis server       # Run proxy server only (http://localhost:8787)
+```
 
 ---
 
-## Supported Free Models (OpenCode Zen)
+## 🧭 Compatibility Matrix
 
-When using the OpenCode provider, Pontis dynamically verifies active models. The typical models include:
-
-- `mimo-v2.5-free` (default)
-- `deepseek-v4-flash-free`
-- `big-pickle`
-- `nemotron-3-ultra-free`
-- `north-mini-code-free`
+| Client Harness | Native Protocol | Supported Upstreams | Key Features Handled |
+| :--- | :--- | :--- | :--- |
+| **Claude Code** | Anthropic Messages (`/v1/messages`) | Google, OpenCode, Cloudflare, Local | Tool use translation, vision/image remapping, prompt cache markers |
+| **Codex CLI** | OpenAI Responses API (`/v1/responses`) | Google, OpenCode, Cloudflare, Local | Turn caching (`previous_response_id`), model metadata generation, event streaming |
+| **Hermes Agent** | OpenAI Chat Completions | Google, OpenCode, Cloudflare, Local | Autonomous agent execution, dynamic base URL and model injection |
+| **OpenCode** | OpenAI / Custom | Google, OpenCode, Cloudflare, Local | Automatic `auth.json` management, dynamic model remapping |
+| **Pi** | Custom Provider | Google, OpenCode, Cloudflare, Local | Auto-injected `models.json` profile, dynamic API key resolution |
 
 ---
 
-## Deployment (Optional)
+## ⚙️ Configuration & Management
 
-If you prefer to host this proxy in the cloud instead of running it locally, you can deploy it as a Cloudflare Worker:
+### Providers & Models
+Pontis performs real-time discovery against your active engine (no hardcoded fallback lists):
+
+```bash
+# Discover live models for a provider
+pontis models -p google         # Queries live Gemini & Gemma models
+pontis models -p local          # Scans running Ollama / LM Studio models
+pontis models -p opencode       # Queries active OpenCode models
+pontis models -p cloudflare     # Queries Cloudflare Workers AI models
+
+# Switch active provider or model
+pontis config set provider google
+pontis config set model gemini-2.5-flash
+
+pontis config set provider local
+pontis config set model qwen3.5:latest
+
+pontis config set provider opencode
+pontis config set model deepseek-v4-flash-free
+
+# View current preferences
+pontis config
+```
+
+### Secure Auth Vault (AES-256-GCM)
+Keys are encrypted on disk in `~/.pontis/credentials.enc` — never stored in plaintext.
+The vault uses AES-256-GCM with a random per-installation key (`~/.pontis/.secret`,
+`0600`). This protects keys against casual inspection and plaintext-at-rest exposure
+(e.g. in backups or a stolen disk image); note that, like most local CLIs, the key is
+stored under your OS user, so it is not a defense against malware already running as
+you. Stored writes are atomic, and a corrupt key is backed up (never silently
+overwritten) so existing credentials aren't bricked without warning.
+
+```bash
+pontis auth list                # Check configured providers and key status
+pontis auth set google          # Save free Google AI Studio API key
+pontis auth set opencode        # Save OpenCode API key
+pontis auth set cloudflare      # Save Cloudflare Account ID & API Token
+pontis auth set local           # Set local endpoint (default: http://localhost:11434/v1)
+pontis auth clear               # Wipe all stored credentials
+```
+
+### Manage Agent CLIs
+```bash
+pontis clients                  # View installed agent CLIs and versions
+pontis install claude           # Install missing client CLI
+pontis install hermes
+pontis install codex
+```
+
+---
+
+## ⚠️ Important: Model Switching Inside Sessions
+
+When an agent is launched through Pontis, the session is tied to your configured Pontis provider and model.
+
+> [!WARNING]
+> **Do not switch to native model names (`claude-3-7-sonnet`, `gpt-5.3-codex`) inside the client CLI's in-session `/model` switcher.**
+>
+> * **Why?** Upstreams like Ollama or OpenCode do not host proprietary OpenAI/Anthropic model weights. Pontis translates generic client requests to your active Pontis model, or the upstream will return `404 Not Found`.
+> * **Want to use your native Claude Pro or OpenAI Plus subscription?** Launch `claude` or `codex` directly without Pontis.
+> * **Want to change models in Pontis?** Switch before launching using `pontis config set model <model>` or through the interactive launcher.
+
+> [!NOTE]
+> **Claude Pro, Claude Max, and OpenAI/Codex paid plans are not used when running through Pontis.** Pontis replaces the client's account credentials with your configured provider key (OpenCode, Google AI Studio, etc.) and redirects all API traffic through the local proxy — your subscription is completely bypassed. This is by design: the whole point is to use the client's UI with a cheaper or free upstream.
+
+---
+
+## 🔧 Environment Variables (Optional Automation)
+
+Bypass interactive menus by setting environment variables in CI/CD or automation scripts:
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `PONTIS_PROVIDER` | Provider preset (`opencode`, `cloudflare`, `local`) | `opencode` |
+| `PONTIS_MODEL` | Active model identifier | Provider default |
+| `PONTIS_UPSTREAM_URL` | Custom upstream base URL | Provider default |
+| `PONTIS_UPSTREAM_FORMAT` | Upstream format (`openai`, `anthropic`, `openai-completions`) | `openai` |
+| `OPENCODE_API_KEY` | OpenCode API token | — |
+| `LOCAL_API_KEY` | Local engine API key (if required) | Dummy key |
+| `PONTIS_DEBUG` | Enable verbose translation logging | `false` |
+| `PONTIS_TIMEOUT_MS` | Upstream request timeout (ms) | `120000` (2 min) |
+
+---
+
+## 🛠️ Deployment as Cloudflare Worker (Optional)
+
+Deploy Pontis as a centralized remote proxy on Cloudflare Workers:
 
 ```bash
 npm install
 npm run deploy
 ```
 
-Once deployed, Cloudflare will output your worker URL (e.g. `https://pontis-proxy.your-subdomain.workers.dev`). You can then configure your CLI clients to target this remote URL instead of the local proxy.
-
-### 1. Configuring Claude Code
-Export the `ANTHROPIC_BASE_URL` variable in your terminal pointing to the `/zen` path of your deployed worker:
-
+Configure your local CLI clients to use your remote endpoint:
 ```bash
-export ANTHROPIC_BASE_URL="https://pontis-proxy.your-subdomain.workers.dev/zen"
+export ANTHROPIC_BASE_URL="https://pontis-proxy.<your-subdomain>.workers.dev/zen"
 export ANTHROPIC_API_KEY="your-opencode-api-key"
 claude
 ```
 
-### 2. Configuring OpenAI Codex CLI
-Export the `OPENAI_BASE_URL` variable in your terminal pointing to the `/v1` path of your deployed worker:
+---
 
-```bash
-export OPENAI_BASE_URL="https://pontis-proxy.your-subdomain.workers.dev/v1"
-export OPENAI_API_KEY="your-opencode-api-key"
-codex
-```
+## 🔍 Comprehensive Troubleshooting Guide
+
+<details>
+<summary><b>1. 429 Too Many Requests / Exceeded Rate Limits</b></summary>
+
+* **Cause**: OpenCode free-tier models (like `mimo-v2.5-free`) have rate limits per minute (RPM). Fast sub-queries from agents like Codex or Claude can exhaust this quickly.
+* **Remedies**:
+  1. Switch to a faster OpenCode model with separate rate limit buckets:
+     ```bash
+     pontis config set model deepseek-v4-flash-free
+     # or
+     pontis config set model nemotron-3.5-lightning-free
+     ```
+  2. Switch to **Local Ollama** (zero rate limits, zero queues):
+     ```bash
+     pontis config set provider local
+     pontis config set model qwen3.5:latest
+     ```
+  3. Switch to **Cloudflare Workers AI** for dedicated enterprise quotas.
+</details>
+
+<details>
+<summary><b>2. 404 Not Found: Model Not Found</b></summary>
+
+* **Cause**: The active model name is not pulled on your local engine or is misspelled.
+* **Remedies**:
+  1. Check what models are currently loaded in your local engine:
+     ```bash
+     pontis models -p local
+     ```
+  2. If using Ollama, pull the desired model:
+     ```bash
+     ollama pull qwen3.5:latest
+     pontis config set model qwen3.5:latest
+     ```
+</details>
+
+<details>
+<summary><b>3. 401 / 403 Authentication Failed</b></summary>
+
+* **Cause**: Invalid or expired API key / token.
+* **Remedies**:
+  1. Re-configure your API key:
+     ```bash
+     pontis auth set opencode
+     # or
+     pontis auth set cloudflare
+     ```
+  2. Verify that your OpenCode key is active at [opencode.ai/auth](https://opencode.ai/auth) $\rightarrow$ Zen $\rightarrow$ API Keys.
+</details>
+
+<details>
+<summary><b>4. Port 8787 Already in Use</b></summary>
+
+* **Cause**: An earlier proxy instance was left running in the background.
+* **Remedy**: Kill the orphaned process on port 8787:
+  ```bash
+  lsof -ti :8787 | xargs kill -9
+  ```
+</details>
+
+<details>
+<summary><b>5. 502 Bad Gateway / Upstream Unreachable</b></summary>
+
+* **Cause**: The upstream engine is not running, blocked by firewall, or DNS failed.
+* **Remedies**:
+  1. Test Ollama connectivity:
+     ```bash
+     curl http://localhost:11434/v1/models
+     ```
+  2. Test OpenCode connectivity:
+     ```bash
+     curl https://opencode.ai/zen/v1/models -H "Authorization: Bearer $OPENCODE_API_KEY"
+     ```
+  3. Ensure your local engine (Ollama, LM Studio, or vLLM) is started.
+</details>
+
+<details>
+<summary><b>6. Request Tracing & Detailed Debug Logs</b></summary>
+
+* Every response includes an `X-Request-Id` header (e.g. `req_abc123_4f`).
+* Enable live translation inspection to view how prompts, tools, and responses are bridged:
+  ```bash
+  export PONTIS_DEBUG=true
+  pontis claude
+  ```
+</details>
+
+<details>
+<summary><b>7. Request Timeout ("Upstream did not respond in time")</b></summary>
+
+* **Cause**: Heavy local models (e.g. 70B parameters) taking time to cold-start or evaluate long prompt contexts.
+* **Remedy**: Increase the upstream timeout (default 120 seconds):
+  ```bash
+  export PONTIS_TIMEOUT_MS=300000 # 5 minutes
+  ```
+</details>
 
 ---
 
-## Troubleshooting
+## 📜 License & Attribution
 
-### Proxy fails to start (`port already in use`)
+Licensed under the [MIT License](LICENSE).
 
-A previous instance may still be running. Kill it manually:
-
-```bash
-lsof -ti :8787 | xargs kill -9
-```
-
-Or restart your terminal / wait 30 seconds for the process to clean up.
-
-### "API key is too short" error
-
-Local providers (Ollama, LM Studio) often use short or dummy keys. Set the minimum length to 0:
-
-```bash
-export PONTIS_MIN_KEY_LENGTH=0
-```
-
-Pontis's CLI sets this automatically when you select a local provider, but manual setups need it.
-
-### "Upstream did not respond in time" error
-
-The upstream model provider took too long to respond. Pontis defaults to a 120-second timeout. If your model is slow to load (e.g., first-time cold start), increase the timeout:
-
-```bash
-export PONTIS_TIMEOUT_MS=300000
-```
-
-### Debug logging
-
-To see detailed request translation, set:
-
-```bash
-export PONTIS_DEBUG=true
-```
-
-You'll see logs prefixed with request IDs like `[req_xxx]` showing how requests are translated and where they're routed. Each request also gets a `X-Request-Id` header in the response for correlation.
-
-### Model not found or wrong metadata
-
-Pontis fetches the model list from the upstream provider and enriches it with known metadata (context window, tool support). If a model is missing, try:
-
-1. Check it's available on the upstream directly: `curl <upstream>/v1/models`
-2. Set a default model explicitly: `export PONTIS_MODEL="your-model-id"`
-3. For Codex CLI, the model metadata table is in `src/model-metadata.ts` — add an entry if needed
-
-### Proxy shows `502` for all requests
-
-This usually means the upstream provider is unreachable or returning errors:
-
-```bash
-# Test the proxy's upstream directly
-curl https://opencode.ai/zen/v1/models -H "Authorization: Bearer $OPENCODE_API_KEY"
-
-# Or for local setups
-curl http://localhost:11434/v1/models
-```
-
-### Request tracing
-
-Every response from the proxy includes an `X-Request-Id` header (e.g., `req_abc123_4f`). Include this ID in any bug reports or when asking for help — it helps correlate proxy logs with upstream behavior.
-
----
-
-## License & Attribution
-
-This project is licensed under the MIT License.
-
-All credit for the translation layer goes to [@cucoleadan](https://github.com/cucoleadan) based on their work in [opencode-cowork-proxy](https://github.com/cucoleadan/opencode-cowork-proxy).
+Special thanks and credit to [@cucoleadan](https://github.com/cucoleadan) for the foundational protocol translation work in [opencode-cowork-proxy](https://github.com/cucoleadan/opencode-cowork-proxy).
