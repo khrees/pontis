@@ -70,16 +70,15 @@ export async function handleResponsesRequest(
   return wrapProxyRequest(reqId, async () => {
     const requestKey = extractApiKey(request.headers);
 
-    // When Codex traffic is redirected from api.openai.com → localhost via
-    // pf/hosts, Codex sends its stored OpenAI key (sk-...). Override with
-    // the OpenCode key from the environment so the upstream accepts it.
-    // SECURITY: this substitutes the server's credential for ANY "sk-*" key,
-    // so this endpoint effectively requires no client auth. That is only safe
-    // because the server binds to loopback (see local-server.ts getHost). Do
-    // not bind to a non-loopback address without adding real authentication.
-    const key = (requestKey && requestKey.startsWith("sk-") && process.env.OPENAI_API_KEY)
-      ? process.env.OPENAI_API_KEY
-      : requestKey;
+    // Codex sends its stored OPENAI_API_KEY (sk-...) when routing through
+    // OPENAI_BASE_URL, or may send no key at all when switching to a native
+    // GPT/o-series model mid-session. In either case, substitute the proxy's
+    // own API key so the real upstream accepts the request.
+    // This is safe because the server only binds to loopback.
+    let key = requestKey;
+    if (!key || (key.startsWith("sk-") && process.env.OPENAI_API_KEY)) {
+      key = process.env.PONTIS_API_KEY || process.env.OPENAI_API_KEY || requestKey;
+    }
 
     const req = (await request.json()) as ResponsesApiRequest;
     const originalModel = req.model || "gpt-5.4-mini";

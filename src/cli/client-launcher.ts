@@ -108,7 +108,6 @@ export function setupPiProvider(apiKey: string, model?: string, proxyUrl = PROXY
     mode: 0o600,
   });
 
-  // ── settings.json (only if absent) ──
   if (!existsSync(PI_SETTINGS_FILE)) {
     writeFileSync(
       PI_SETTINGS_FILE,
@@ -123,14 +122,6 @@ export function setupPiProvider(apiKey: string, model?: string, proxyUrl = PROXY
     );
   }
 }
-
-/**
- * Remove the "pontis" provider from `~/.pi/agent/models.json`.
- * Idempotent — safe to call even if the file doesn't exist.
- */
-// ──────────────────────────────────────────────
-//  OpenCode provider configuration
-// ──────────────────────────────────────────────
 
 const OPENCODE_PROVIDER_ID = "openai";
 
@@ -234,7 +225,6 @@ export function launchClient(
   extraArgs: string[],
   proxyUrl = PROXY_URL,
 ): Promise<void> {
-  // Section header
   const CLIENT_DISPLAY_NAMES: Record<string, string> = {
     codex: "Codex",
     server: "Server Mode",
@@ -253,7 +243,7 @@ export function launchClient(
   if (clientCmd === "server") {
     badge("info", "Proxy is live — connect your clients");
     console.log(`  Press Ctrl+C to stop\n`);
-    return new Promise(() => {}); // hang
+    return new Promise(() => {});
   }
 
   const childEnv: Record<string, string> = { ...process.env } as Record<
@@ -263,7 +253,6 @@ export function launchClient(
 
   switch (clientCmd) {
     case "codex":
-      // Use dedicated Pontis profile: --profile pontis + proxy base URL
       childEnv.OPENAI_BASE_URL = `${proxyUrl}/v1`;
       childEnv.OPENAI_API_KEY = apiKey;
       childEnv.PONTIS_API_KEY = apiKey;
@@ -275,7 +264,6 @@ export function launchClient(
       }
       break;
     case "hermes":
-      // Hermes Agent routes through OpenAI-compatible API
       childEnv.OPENAI_BASE_URL = `${proxyUrl}/v1`;
       childEnv.OPENAI_API_KEY = apiKey;
       childEnv.HERMES_API_BASE = `${proxyUrl}/v1`;
@@ -286,9 +274,6 @@ export function launchClient(
       }
       break;
     case "pi":
-      // Pass the key via environment only. Do NOT add it as a --api-key argv:
-      // command-line args are visible to other processes via `ps`. Pi resolves
-      // the key from OPENAI_API_KEY / PONTIS_API_KEY.
       childEnv.PONTIS_API_KEY = apiKey;
       childEnv.OPENAI_API_KEY = apiKey;
       extraArgs = [
@@ -306,7 +291,6 @@ export function launchClient(
       childEnv.OPENCODE_DISABLE_MODELS_FETCH = "true";
       break;
     default:
-      // Claude Code
       childEnv.ANTHROPIC_BASE_URL = `${proxyUrl}`;
       childEnv.ANTHROPIC_API_KEY = apiKey;
       childEnv.ANTHROPIC_MODEL = model;

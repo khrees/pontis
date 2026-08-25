@@ -17,7 +17,6 @@ export const t = {
   accent: chalk.hex("#E2E8F0"), // slate-200 — body text
 };
 
-// Symbols
 export const SYM = {
   bullet: "●",
   arrow: "▶",
@@ -29,14 +28,8 @@ export const SYM = {
   spinner: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
 };
 
-/** Display the brand splash on startup */
-export function splash() {
-  console.log(
-    `  ${t.primary(SYM.diamond)} ${t.bold("Pontis")} ${t.muted(`v${VERSION}`)} — ${t.muted("Universal AI gateway")}`,
-  );
-}
+export function splash() {}
 
-/** Section header with title */
 export function section(title: string) {
   console.log(`\n  ${t.primary(SYM.bullet)} ${t.bold(title)}`);
 }

@@ -95,7 +95,6 @@ function addPontisOptions(cmd: Command) {
     );
 }
 
-// Subcommand: claude
 addPontisOptions(
   program
     .command("claude")
@@ -109,7 +108,6 @@ addPontisOptions(
   });
 });
 
-// Subcommand: codex
 addPontisOptions(
   program
     .command("codex")
@@ -123,7 +121,6 @@ addPontisOptions(
   });
 });
 
-// Subcommand: hermes
 addPontisOptions(
   program
     .command("hermes")
@@ -137,7 +134,6 @@ addPontisOptions(
   });
 });
 
-// Subcommand: opencode
 addPontisOptions(
   program
     .command("opencode")
@@ -151,7 +147,6 @@ addPontisOptions(
   });
 });
 
-// Subcommand: pi
 addPontisOptions(
   program
     .command("pi")
@@ -165,7 +160,6 @@ addPontisOptions(
   });
 });
 
-// Subcommand: server
 addPontisOptions(
   program
     .command("server")
@@ -176,10 +170,6 @@ addPontisOptions(
     process.exit(1);
   });
 });
-
-// ──────────────────────────────────────────────
-//  Authentication Management
-// ──────────────────────────────────────────────
 
 const authCmd = program
   .command("auth")
@@ -299,7 +289,6 @@ clientsCmd
     }
   });
 
-// Top-level `pontis list` alias
 program
   .command("list")
   .description("List supported coding agent CLIs (alias to: pontis clients list)")
@@ -308,7 +297,6 @@ program
     cmdClientsList(opts);
   });
 
-// Subcommand: install (for backward compatibility)
 program
   .command("install")
   .description("Install or check coding agent CLI tools")
@@ -751,7 +739,6 @@ program
     }
   });
 
-// Subcommand: cleanup-redirect — remove stale Codex redirect rules
 program
   .command("cleanup-redirect")
   .description("Remove stale /etc/hosts entry and pf rule for api.openai.com")
@@ -784,7 +771,6 @@ program
     }
   });
 
-// Default (no subcommand): interactive wizard / Quick Launch
 program.action(() => {
   const opts = program.opts();
   const env: PontisEnv = {};
@@ -832,10 +818,19 @@ function extractChildArgs(...commands: string[]): string[] {
   const result: string[] = [];
   for (let i = subIdx + 1; i < args.length; i++) {
     const arg = args[i];
+
+    // Exact match: --flag value (two separate args)
     if (KNOWN_PONTIS_FLAGS.has(arg)) {
-      i++;
+      i++; // skip the value arg too
       continue;
     }
+
+    // Combined form: --flag=value (single arg)
+    const eqIdx = arg.indexOf("=");
+    if (eqIdx > 0 && KNOWN_PONTIS_FLAGS.has(arg.slice(0, eqIdx))) {
+      continue;
+    }
+
     if (arg === "--") {
       result.push(...args.slice(i + 1));
       break;

@@ -1,5 +1,5 @@
 import { existsSync, writeFileSync, unlinkSync } from "node:fs";
-import { section, kv, badge, t, select, input, confirm, outputJson, splash } from "./ui";
+import { section, kv, badge, t, select, input, confirm, outputJson } from "./ui";
 import { redactKey } from "../redact";
 import {
   CLOUDFLARE_CONFIG_FILE,
@@ -339,7 +339,6 @@ export async function cmdAuthClear(silent = false): Promise<void> {
  * Interactive auth manager dashboard.
  */
 export async function cmdAuthInteractive(): Promise<void> {
-  splash();
   cmdAuthStatus();
 
   const choices = [

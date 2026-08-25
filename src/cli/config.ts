@@ -276,7 +276,6 @@ export function resolveActiveProviderAndModel(options?: {
   });
 }
 
-// Function to get OpenCode API key
 export function getOpenCodeApiKey(): string | null {
   return retrieveOpenCodeApiKey() || process.env.OPENCODE_API_KEY || null;
 }

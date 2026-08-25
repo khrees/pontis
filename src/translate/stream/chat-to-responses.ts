@@ -54,9 +54,58 @@ export function streamChatToResponses(
 
   let pendingText = "";
   let inDsml = false;
+  let flushMode = false; // when true, processTextDelta skips partial-prefix holdback (used at EOF)
   let toolCallCount = 0;
   let accumulatedUsage: OpenAIUsage | null = null;
   const completedOutputs: ResponsesOutputItem[] = [];
+
+  function emitFunctionCall(
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    toolName: string,
+    args: Record<string, string>,
+  ): void {
+    toolCallCount++;
+    const callId = "call_" + Math.random().toString(36).substring(2, 15);
+    const toolItemId = "item_" + callId;
+    const argsStr = JSON.stringify(args);
+    const outputIndex = toolCallCount;
+
+    enqueueSSE(controller, "response.output_item.added", {
+      type: "response.output_item.added",
+      response_id: resolvedId,
+      output_index: outputIndex,
+      item: { id: toolItemId, type: "function_call", name: toolName, call_id: callId, arguments: "" }
+    });
+    enqueueSSE(controller, "response.function_call_arguments.delta", {
+      type: "response.function_call_arguments.delta",
+      response_id: resolvedId,
+      item_id: toolItemId,
+      output_index: outputIndex,
+      call_id: callId,
+      delta: argsStr
+    });
+    enqueueSSE(controller, "response.function_call_arguments.done", {
+      type: "response.function_call_arguments.done",
+      response_id: resolvedId,
+      item_id: toolItemId,
+      output_index: outputIndex,
+      call_id: callId,
+      arguments: argsStr
+    });
+    enqueueSSE(controller, "response.output_item.done", {
+      type: "response.output_item.done",
+      response_id: resolvedId,
+      item: { id: toolItemId, type: "function_call", name: toolName, call_id: callId, arguments: argsStr }
+    });
+    completedOutputs.push({
+      id: toolItemId,
+      type: "function_call",
+      name: toolName,
+      call_id: callId,
+      arguments: argsStr,
+      status: "completed"
+    });
+  }
 
   function ensureMessageItem(controller: ReadableStreamDefaultController<Uint8Array>) {
     if (!textItemStarted) {
@@ -92,6 +141,23 @@ export function streamChatToResponses(
     }
   }
 
+  function flushTextUpTo(upTo: number, controller: ReadableStreamDefaultController<Uint8Array>) {
+    const chunk = pendingText.slice(0, upTo);
+    pendingText = pendingText.slice(upTo);
+    if (!chunk) return;
+    ensureTextItem(controller);
+    fullText += chunk;
+    if (fullText.length > MAX_TEXT_ACCUMULATION) fullText = fullText.slice(-MAX_TEXT_ACCUMULATION);
+    enqueueSSE(controller, "response.output_text.delta", {
+      type: "response.output_text.delta",
+      response_id: resolvedId,
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      delta: chunk
+    });
+  }
+
   function processTextDelta(text: string, controller: ReadableStreamDefaultController<Uint8Array>) {
     pendingText += text;
     if (pendingText.length > MAX_TEXT_ACCUMULATION) {
@@ -103,168 +169,93 @@ export function streamChatToResponses(
       searchAgain = false;
 
       if (!inDsml) {
-        // Look for the start of a DSML block
-        const startRegex = /<[|｜]{2}DSML[|｜]{2}tool_calls>/i;
-        const startMatch = pendingText.match(startRegex);
+        const dsmlStartMatch = pendingText.match(/<[|｜]{2}DSML[|｜]{2}tool_calls>/i);
+        const tcOpenMatch = pendingText.match(/<tool_call>/i);
 
-        if (startMatch) {
-          const startIndex = startMatch.index!;
-          // 1. Flush any text before the DSML block starts
-          const textBefore = pendingText.slice(0, startIndex);
-          if (textBefore) {
-            ensureTextItem(controller);
-            fullText += textBefore;
-            if (fullText.length > MAX_TEXT_ACCUMULATION) {
-              fullText = fullText.slice(-MAX_TEXT_ACCUMULATION);
-            }
-            enqueueSSE(controller, "response.output_text.delta", {
-              type: "response.output_text.delta",
-              response_id: resolvedId,
-              item_id: itemId,
-              output_index: 0,
-              content_index: 0,
-              delta: textBefore
-            });
-          }
+        // Pick whichever tag appears first
+        const dsmlFirst = dsmlStartMatch && (!tcOpenMatch || dsmlStartMatch.index! <= tcOpenMatch.index!);
+        const tcFirst = tcOpenMatch && (!dsmlStartMatch || tcOpenMatch.index! < dsmlStartMatch.index!);
+
+        if (dsmlFirst) {
+          const startIndex = dsmlStartMatch!.index!;
+          flushTextUpTo(startIndex, controller);
           closeTextItem(controller);
-
-          // 2. Remove the start tag and everything before it
-          pendingText = pendingText.slice(startIndex + startMatch[0].length);
+          pendingText = pendingText.slice(startIndex + dsmlStartMatch![0].length);
           inDsml = true;
           searchAgain = true;
-        } else {
-          // If start tag is not found, we want to stream text, but we must
-          // avoid flushing a partial tag if it's currently at the end of the buffer.
-          const matchStart = "<｜｜DSML｜｜tool_calls>";
-          const matchStartAlt = "<||DSML||tool_calls>";
 
-          let potentialPrefix = false;
-          for (let i = 1; i <= 30; i++) {
-            if (pendingText.length < i) break;
-            const endSlice = pendingText.slice(-i);
-            if (matchStart.startsWith(endSlice) || matchStartAlt.startsWith(endSlice)) {
-              potentialPrefix = true;
-              break;
-            }
-          }
+        } else if (tcFirst) {
+          const openIdx = tcOpenMatch!.index!;
+          const closeMatch = pendingText.slice(openIdx).match(/<\/tool_call>/i);
 
-          if (potentialPrefix) {
-            if (pendingText.length > 30) {
-              const toFlush = pendingText.slice(0, -30);
-              pendingText = pendingText.slice(-30);
-              if (toFlush) {
-                ensureTextItem(controller);
-                fullText += toFlush;
-                if (fullText.length > MAX_TEXT_ACCUMULATION) {
-                  fullText = fullText.slice(-MAX_TEXT_ACCUMULATION);
-                }
-                enqueueSSE(controller, "response.output_text.delta", {
-                  type: "response.output_text.delta",
-                  response_id: resolvedId,
-                  item_id: itemId,
-                  output_index: 0,
-                  content_index: 0,
-                  delta: toFlush
-                });
-              }
+          if (!closeMatch) {
+            // Incomplete block — flush everything before it and hold the rest
+            if (!flushMode) {
+              flushTextUpTo(openIdx, controller);
+              pendingText = pendingText.slice(openIdx);
             }
           } else {
-            if (pendingText) {
-              ensureTextItem(controller);
-              fullText += pendingText;
-              if (fullText.length > MAX_TEXT_ACCUMULATION) {
-                fullText = fullText.slice(-MAX_TEXT_ACCUMULATION);
-              }
-              enqueueSSE(controller, "response.output_text.delta", {
-                type: "response.output_text.delta",
-                response_id: resolvedId,
-                item_id: itemId,
-                output_index: 0,
-                content_index: 0,
-                delta: pendingText
-              });
-              pendingText = "";
+            flushTextUpTo(openIdx, controller);
+            closeTextItem(controller);
+
+            const closeRelIdx = closeMatch.index!;
+            const inner = pendingText.slice(openIdx + "<tool_call>".length, openIdx + closeRelIdx);
+            pendingText = pendingText.slice(openIdx + closeRelIdx + "</tool_call>".length);
+
+            const nameMatch = inner.match(/^([^<]+)/);
+            const toolName = nameMatch ? nameMatch[1].trim() : "unknown";
+            const args: Record<string, string> = {};
+            const argKeyRegex = /<arg_key>([^<]*)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/gi;
+            let argMatch;
+            while ((argMatch = argKeyRegex.exec(inner)) !== null) {
+              args[argMatch[1].trim()] = argMatch[2].trim();
             }
+            emitFunctionCall(controller, toolName, args);
+            searchAgain = true;
+          }
+
+        } else {
+          // No tool-call tag found — flush text, holding back any potential partial prefix
+          if (!flushMode) {
+            const guards = ["<｜｜DSML｜｜tool_calls>", "<||DSML||tool_calls>", "<tool_call>"];
+            let potentialPrefix = false;
+            for (let i = 1; i <= 30; i++) {
+              if (pendingText.length < i) break;
+              const tail = pendingText.slice(-i);
+              if (guards.some(g => g.startsWith(tail))) { potentialPrefix = true; break; }
+            }
+            if (potentialPrefix && pendingText.length > 30) {
+              flushTextUpTo(pendingText.length - 30, controller);
+            } else if (!potentialPrefix) {
+              flushTextUpTo(pendingText.length, controller);
+            }
+          } else {
+            flushTextUpTo(pendingText.length, controller);
           }
         }
+
       } else {
-        // Inside DSML block — look for complete invoke blocks
+        // Inside DSML block — consume complete invoke blocks
         const invokeRegex = /<[|｜]{2}DSML[|｜]{2}invoke\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/[|｜]{2}DSML[|｜]{2}invoke\s*>/i;
         const invokeMatch = pendingText.match(invokeRegex);
 
         if (invokeMatch) {
           const toolName = invokeMatch[1];
-          const innerContent = invokeMatch[2];
-          const matchedString = invokeMatch[0];
+          const inner = invokeMatch[2];
           const matchIndex = invokeMatch.index!;
-
-          // Parse parameters inside the invoke block
           const args: Record<string, string> = {};
           const paramRegex = /<[|｜]{2}DSML[|｜]{2}parameter\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/[|｜]{2}DSML[|｜]{2}parameter\s*>/gi;
           let paramMatch;
-          while ((paramMatch = paramRegex.exec(innerContent)) !== null) {
+          while ((paramMatch = paramRegex.exec(inner)) !== null) {
             args[paramMatch[1]] = paramMatch[2].trim();
           }
-
-          const callId = "call_" + Math.random().toString(36).substring(2, 15);
-          const toolItemId = "item_" + callId;
-          const argsStr = JSON.stringify(args);
-          toolCallCount++;
-
-          enqueueSSE(controller, "response.output_item.added", {
-            type: "response.output_item.added",
-            response_id: resolvedId,
-            output_index: toolCallCount,
-            item: {
-              id: toolItemId,
-              type: "function_call",
-              name: toolName,
-              call_id: callId,
-              arguments: ""
-            }
-          });
-
-          enqueueSSE(controller, "response.function_call_arguments.delta", {
-            type: "response.function_call_arguments.delta",
-            response_id: resolvedId,
-            item_id: toolItemId,
-            output_index: toolCallCount,
-            call_id: callId,
-            delta: argsStr
-          });
-
-          enqueueSSE(controller, "response.function_call_arguments.done", {
-            type: "response.function_call_arguments.done",
-            response_id: resolvedId,
-            item_id: toolItemId,
-            output_index: toolCallCount,
-            call_id: callId,
-            arguments: argsStr
-          });
-
-          enqueueSSE(controller, "response.output_item.done", {
-            type: "response.output_item.done",
-            response_id: resolvedId,
-            item: {
-              id: toolItemId,
-              type: "function_call",
-              name: toolName,
-              call_id: callId,
-              arguments: argsStr
-            }
-          });
-
-          // Remove the matched invoke block from pendingText
-          pendingText = pendingText.slice(0, matchIndex) + pendingText.slice(matchIndex + matchedString.length);
+          emitFunctionCall(controller, toolName, args);
+          pendingText = pendingText.slice(0, matchIndex) + pendingText.slice(matchIndex + invokeMatch[0].length);
           searchAgain = true;
         } else {
-          // Check if the DSML block has closed
-          const endRegex = /<\/[|｜]{2}DSML[|｜]{2}tool_calls>/i;
-          const endMatch = pendingText.match(endRegex);
-
+          const endMatch = pendingText.match(/<\/[|｜]{2}DSML[|｜]{2}tool_calls>/i);
           if (endMatch) {
-            const endIndex = endMatch.index!;
-            pendingText = pendingText.slice(endIndex + endMatch[0].length);
+            pendingText = pendingText.slice(endMatch.index! + endMatch[0].length);
             inDsml = false;
             searchAgain = true;
           }
@@ -384,101 +375,13 @@ export function streamChatToResponses(
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          if (inDsml) {
-            // Process any complete invoke blocks from pendingText
-            const invokeRegex = /<[|｜]{2}DSML[|｜]{2}invoke\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/[|｜]{2}DSML[|｜]{2}invoke\s*>/i;
-            let invokeMatch = pendingText.match(invokeRegex);
-            while (invokeMatch) {
-              const toolName = invokeMatch[1];
-              const innerContent = invokeMatch[2];
-              const matchedString = invokeMatch[0];
-              const matchIndex = invokeMatch.index!;
+          // Drain any remaining tool-call blocks and text using the same parser,
+          // but in flush mode so the partial-prefix holdback is disabled.
+          flushMode = true;
+          inDsml = inDsml; // preserve state so DSML block is continued
+          processTextDelta("", controller);
+          flushMode = false;
 
-              const args: Record<string, string> = {};
-              const paramRegex = /<[|｜]{2}DSML[|｜]{2}parameter\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/[|｜]{2}DSML[|｜]{2}parameter\s*>/gi;
-              let paramMatch;
-              while ((paramMatch = paramRegex.exec(innerContent)) !== null) {
-                args[paramMatch[1]] = paramMatch[2].trim();
-              }
-
-              const callId = "call_" + Math.random().toString(36).substring(2, 15);
-              const toolItemId = "item_" + callId;
-              const argsStr = JSON.stringify(args);
-              toolCallCount++;
-
-              enqueueSSE(controller, "response.output_item.added", {
-                type: "response.output_item.added",
-                response_id: resolvedId,
-                output_index: toolCallCount,
-                item: {
-                  id: toolItemId,
-                  type: "function_call",
-                  name: toolName,
-                  call_id: callId,
-                  arguments: ""
-                }
-              });
-
-              enqueueSSE(controller, "response.function_call_arguments.delta", {
-                type: "response.function_call_arguments.delta",
-                response_id: resolvedId,
-                item_id: toolItemId,
-                output_index: toolCallCount,
-                call_id: callId,
-                delta: argsStr
-              });
-
-              enqueueSSE(controller, "response.function_call_arguments.done", {
-                type: "response.function_call_arguments.done",
-                response_id: resolvedId,
-                item_id: toolItemId,
-                output_index: toolCallCount,
-                call_id: callId,
-                arguments: argsStr
-              });
-
-              enqueueSSE(controller, "response.output_item.done", {
-                type: "response.output_item.done",
-                response_id: resolvedId,
-                item: {
-                  id: toolItemId,
-                  type: "function_call",
-                  name: toolName,
-                  call_id: callId,
-                  arguments: argsStr
-                }
-              });
-
-              // Track DSML tool call for response.completed
-              completedOutputs.push({
-                id: toolItemId,
-                type: "function_call",
-                name: toolName,
-                call_id: callId,
-                arguments: argsStr,
-                status: "completed"
-              });
-
-              pendingText = pendingText.slice(0, matchIndex) + pendingText.slice(matchIndex + matchedString.length);
-              invokeMatch = pendingText.match(invokeRegex);
-            }
-            inDsml = false;
-          }
-
-          // Flush any final normal text left in pendingText
-          if (pendingText) {
-            ensureTextItem(controller);
-            fullText += pendingText;
-            enqueueSSE(controller, "response.output_text.delta", {
-              type: "response.output_text.delta",
-              response_id: resolvedId,
-              item_id: itemId,
-              output_index: 0,
-              content_index: 0,
-              delta: pendingText
-            });
-            pendingText = "";
-          }
 
           if (hasStreamedReasoning) {
             enqueueSSE(controller, "response.reasoning_text.done", {

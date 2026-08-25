@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { select, input, inputRequired, createSpinner, badge, section, splash, t } from "./ui";
+import { select, input, inputRequired, createSpinner, badge, section, t } from "./ui";
 import { CACHE_FILE, getOpenCodeApiKey } from "./config";
 import { storeOpenCodeApiKey } from "../secure-storage";
 import { getPreferences, savePreferences } from "./preferences";
@@ -191,7 +191,6 @@ export async function setupOpenCodeInteractive(): Promise<{
 }
 
 export async function cmdUpdateKey(keyArg?: string) {
-  splash();
   section("Update OpenCode API Key");
   let apiKey = keyArg;
   if (!apiKey) {

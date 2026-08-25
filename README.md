@@ -157,6 +157,9 @@ When an agent is launched through Pontis, the session is tied to your configured
 > * **Want to use your native Claude Pro or OpenAI Plus subscription?** Launch `claude` or `codex` directly without Pontis.
 > * **Want to change models in Pontis?** Switch before launching using `pontis config set model <model>` or through the interactive launcher.
 
+> [!NOTE]
+> **Claude Pro, Claude Max, and OpenAI/Codex paid plans are not used when running through Pontis.** Pontis replaces the client's account credentials with your configured provider key (OpenCode, Google AI Studio, etc.) and redirects all API traffic through the local proxy — your subscription is completely bypassed. This is by design: the whole point is to use the client's UI with a cheaper or free upstream.
+
 ---
 
 ## 🔧 Environment Variables (Optional Automation)

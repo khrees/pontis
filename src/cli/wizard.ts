@@ -1,5 +1,4 @@
 import {
-  splash,
   section,
   badge,
   kv,
@@ -84,14 +83,9 @@ function closestProvider(value: string): ProviderType | null {
 }
 
 export async function runInteractiveWizard(env: PontisEnv) {
-  splash();
-
   const prefs = getPreferences();
   const lastUsed = getLastUsed();
 
-  // Quick launch: with a complete previous session and no explicit overrides,
-  // offer a one-Enter relaunch (default). Anything else falls through to the
-  // full wizard.
   if (
     !env.provider &&
     !env.model &&
@@ -114,7 +108,7 @@ export async function runInteractiveWizard(env: PontisEnv) {
         lastUsed.client as string,
         { provider: lastUsed.provider, model: lastUsed.model },
         [],
-        true, // splash already shown above
+        true,
       );
       return;
     }
@@ -227,8 +221,6 @@ export async function runWithConfig(
   extraArgs: string[],
   skipSplash = false,
 ) {
-  if (!skipSplash) splash();
-
   const prefs = getPreferences();
   const openCodeKey = getOpenCodeApiKey();
   const savedCf = getCloudflareConfigSaved();
@@ -367,6 +359,13 @@ async function launchProxyAndClient(
   }
 
   try {
+    // Make the API key available to the proxy process via environment, so the
+    // Responses handler can substitute it for any "sk-*" key Codex sends when
+    // the user switches to a native OpenAI model mid-session.
+    process.env.PONTIS_API_KEY = apiKey;
+    if (clientCmd === "codex" || clientCmd === "server") {
+      process.env.OPENAI_API_KEY = apiKey;
+    }
     const proxyInfo = await startProxy(model, false);
     let proxyUrl = proxyInfo.proxyUrl;
 
