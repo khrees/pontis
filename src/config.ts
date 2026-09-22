@@ -11,7 +11,7 @@ import {
 } from "./env";
 import { extractApiKey, validateApiKey } from "./auth";
 import { InvalidApiKeyError } from "./errors";
-import { resolveOpenCodeTier } from "./opencode-models";
+import { resolveOpenCodeTier, isFreeOpenCodeModel } from "./opencode-models";
 
 export const GO_UPSTREAM = getGoUpstream("https://opencode.ai/zen/go/v1");
 export const ZEN_UPSTREAM = getZenUpstream("https://opencode.ai/zen/v1");
@@ -259,7 +259,13 @@ export function resolveModelAndUpstream(
   const upstream = selectUpstream(request, routeUpstream, resolvedModel);
   let authErr = null;
   if (isOpencode) {
-    authErr = validateApiKey(key);
+    const isFree = isFreeOpenCodeModel(resolvedModel);
+    const isDummy = !key || key === "pontis" || key === "dummy";
+    if (!isDummy) {
+      authErr = validateApiKey(key);
+    } else if (!isFree) {
+      authErr = validateApiKey(key);
+    }
   } else if (isCloudflare || isGoogle) {
     if (!key) {
       throw new InvalidApiKeyError("Missing API key. Provide x-api-key or Authorization header.");

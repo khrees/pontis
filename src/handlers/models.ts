@@ -60,9 +60,10 @@ async function fetchOpenAIModelIds(
   key: string | null,
 ): Promise<string[]> {
   try {
+    const isDummy = !key || key === "pontis" || key === "dummy";
     const res = await fetchWithTimeout(url, {
       method: "GET",
-      headers: { ...(key ? { Authorization: `Bearer ${key}` } : {}) },
+      headers: { ...(!isDummy ? { Authorization: `Bearer ${key}` } : {}) },
     });
     if (!res.ok) return [];
     const data = (await res.json()) as { data?: { id: string }[] };
@@ -84,7 +85,7 @@ async function fetchAnthropicModelIds(
   try {
     const res = await fetchWithTimeout(url, {
       method: "GET",
-      headers: anthropicHeaders(request, key ?? ""),
+      headers: anthropicHeaders(request, key!),
     });
     if (!res.ok) return [];
     const data = (await res.json()) as { data?: { id: string }[] };
@@ -106,8 +107,9 @@ export async function handleModelsRequest(
 
     const isOpencodeUpstream =
       upstream.includes("opencode.ai") || provider === "opencode";
+    const isDummy = !key || key === "pontis" || key === "dummy";
 
-    if (isOpencodeUpstream) {
+    if (isOpencodeUpstream && !isDummy) {
       validateApiKey(key);
     }
 

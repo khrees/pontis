@@ -77,4 +77,62 @@ describe("Interactive UI Selection (select)", () => {
     const result = await selectPromise;
     expect(result).toEqual({ value: "Option C", index: 2 });
   });
+
+  describe("allowBack navigation", () => {
+    it("returns isBack: true when Escape is pressed", async () => {
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: true,
+        configurable: true,
+      });
+      (process.stdin as any).setRawMode = vi.fn();
+
+      const selectPromise = select("Pick an option", ["Option A", "Option B"], {
+        allowBack: true,
+      });
+
+      process.stdin.emit("keypress", "", { name: "escape" });
+
+      const result = await selectPromise;
+      expect(result.isBack).toBe(true);
+      expect(result.index).toBe(-2);
+    });
+
+    it("returns isBack: true when Left Arrow is pressed", async () => {
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: true,
+        configurable: true,
+      });
+      (process.stdin as any).setRawMode = vi.fn();
+
+      const selectPromise = select("Pick an option", ["Option A", "Option B"], {
+        allowBack: true,
+      });
+
+      process.stdin.emit("keypress", "", { name: "left", sequence: "\x1B[D" });
+
+      const result = await selectPromise;
+      expect(result.isBack).toBe(true);
+      expect(result.index).toBe(-2);
+    });
+
+    it("returns isBack: true when Back option is selected from menu", async () => {
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: true,
+        configurable: true,
+      });
+      (process.stdin as any).setRawMode = vi.fn();
+
+      const selectPromise = select("Pick an option", ["Option A"], {
+        allowCustom: false,
+        allowBack: true,
+        defaultIndex: 1, // Focus on Back item (index 1)
+      });
+
+      process.stdin.emit("keypress", "", { name: "return" });
+
+      const result = await selectPromise;
+      expect(result.isBack).toBe(true);
+      expect(result.index).toBe(-2);
+    });
+  });
 });

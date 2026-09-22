@@ -4,10 +4,12 @@ import {
   kv,
   error,
   select,
+  input,
   createSpinner,
   t,
 } from "./ui";
-import { selectProviderInteractive, selectClientInteractive } from "./ui";
+import { storeGoogleApiKey, storeOpenCodeApiKey, storeCloudflareApiToken } from "../secure-storage";
+import { selectProviderInteractive } from "./ui";
 import { setupLocalInteractive, detectRunningLocalEngine, fetchLocalModels } from "./provider-local";
 import { setupOpenCodeInteractive, getOpenCodeApiKeyInteractive, fetchOpenCodeModelsGrouped } from "./provider-opencode";
 
@@ -17,8 +19,11 @@ import {
   fetchCloudflareModels,
   sortCloudflareModels,
   KNOWN_CLOUDFLARE_MODELS,
+  DEFAULT_CLOUDFLARE_MODEL,
 } from "./provider-cloudflare";
 import { setupGoogleInteractive, getGoogleApiKeyInteractive, fetchGoogleModels } from "./provider-google";
+import { WizardStateMachine, type WizardContext } from "./wizard-machine";
+import { createWizardSteps } from "./wizard-steps";
 import { startProxy, killActiveProxy } from "./proxy-manager";
 import {
   launchClient,
@@ -44,8 +49,6 @@ import {
   type PontisEnv,
 } from "./config";
 import {
-  checkAll,
-  CLIENTS,
   type ClientName,
 } from "./install-engine";
 import {
@@ -88,43 +91,8 @@ function closestProvider(value: string): ProviderType | null {
 }
 
 export async function runInteractiveWizard(env: PontisEnv) {
-  const prefs = getPreferences();
   const lastUsed = getLastUsed();
-
-  if (
-    !env.provider &&
-    !env.model &&
-    !env.clientCmd &&
-    lastUsed?.client &&
-    lastUsed?.provider &&
-    lastUsed?.model
-  ) {
-    const clientName = CLIENTS[lastUsed.client as ClientName]?.name || lastUsed.client;
-    const relaunch = await select(
-      "Launch",
-      [
-        `Launch last session — ${clientName} · ${lastUsed.model} · ${getProviderDisplayName(lastUsed.provider)}`,
-        `Set up / change provider, model, or client`,
-      ],
-      { allowCustom: false, defaultIndex: 0 },
-    );
-    if (relaunch.index === 0) {
-      await runWithConfig(
-        lastUsed.client as string,
-        { provider: lastUsed.provider, model: lastUsed.model },
-        [],
-        true,
-      );
-      return;
-    }
-  }
-
-  const clientStatus = checkAll();
-  const { provider: activeProvider } = resolveActiveProviderAndModel();
-
-  const detectedLocal = await detectRunningLocalEngine();
-
-  let provider: ProviderType;
+  let initialProvider: ProviderType | undefined;
   if (env.provider) {
     const normalized = normalizeProvider(env.provider);
     if (!normalized) {
@@ -133,62 +101,47 @@ export async function runInteractiveWizard(env: PontisEnv) {
         `Unknown provider "${env.provider}".${suggestion ? ` Did you mean "${suggestion}"?` : ""} Valid providers: google, opencode, local, cloudflare.`,
       );
     }
-    provider = normalized;
-  } else {
-    provider = await selectProviderInteractive(
-      detectedLocal ? `${detectedLocal.name}` : null,
-      activeProvider,
+    initialProvider = normalized;
+  }
+
+  const initialContext: WizardContext = {
+    env,
+    lastUsed:
+      lastUsed?.client && lastUsed?.provider && lastUsed?.model
+        ? { client: lastUsed.client, provider: lastUsed.provider, model: lastUsed.model }
+        : undefined,
+    provider: initialProvider,
+    model: env.model,
+    client: env.clientCmd as ClientName | "server" | undefined,
+    apiKey: env.apiKey,
+  };
+
+  const steps = createWizardSteps();
+  const machine = new WizardStateMachine(initialContext, steps);
+  const result = await machine.run();
+
+  if (!result) {
+    console.log(`\n  ${t.muted("Wizard cancelled.")}\n`);
+    return;
+  }
+
+  if (result.launchDirectly && result.client && result.provider && result.model) {
+    await runWithConfig(
+      result.client,
+      { provider: result.provider, model: result.model },
+      [],
+      true,
     );
+    return;
   }
 
-  let model: string;
-  let apiKey: string;
-  let upstreamUrl: string | undefined;
-
-  switch (provider) {
-    case "google": {
-      section("Google (Gemini) Setup");
-      const g = await setupGoogleInteractive();
-      model = env.model || g.model;
-      apiKey = env.apiKey || g.apiKey;
-      upstreamUrl = g.upstreamUrl;
-      break;
-    }
-    case "local": {
-      section("Local AI Setup");
-      const local = await setupLocalInteractive();
-      model = env.model || local.model;
-      apiKey = env.apiKey || local.apiKey;
-      upstreamUrl = local.upstreamUrl;
-      break;
-    }
-    case "cloudflare": {
-      section("Cloudflare AI Gateway Setup");
-      const cf = await setupCloudflareInteractive();
-      model = env.model || cf.model;
-      apiKey = env.apiKey || cf.apiKey;
-      upstreamUrl = cf.upstreamUrl;
-      break;
-    }
-    default: {
-      section("OpenCode Setup");
-      const oc = await setupOpenCodeInteractive();
-      model = env.model || oc.model;
-      apiKey = env.apiKey || oc.apiKey;
-      break;
-    }
-  }
-
-  const defaultClientChoice = prefs.defaultClient || lastUsed?.client || "claude";
-  const clientCmd = (env.clientCmd || (await selectClientInteractive(clientStatus, defaultClientChoice))) as ClientName | "server";
-
-  if (clientCmd !== "server") {
-    const ready = await ensureClientReady(clientCmd, true);
-    if (!ready) {
-      const name = CLIENTS[clientCmd]?.name || clientCmd;
-      error(`${name} is required to continue.`);
-    }
-  }
+  const clientCmd = (result.client || "claude") as ClientName | "server";
+  const provider = result.provider || "opencode";
+  const model =
+    result.model ||
+    (provider === "cloudflare" ? DEFAULT_CLOUDFLARE_MODEL : "mimo-v2.5-free");
+  const apiKey = result.apiKey || (provider === "local" ? getLocalApiKey() : "");
+  const upstreamUrl = result.upstreamUrl;
 
   savePreferences({
     defaultProvider: provider,
@@ -539,14 +492,20 @@ async function promptRecovery(
     availableModels = availableModels.filter((m) => m !== failedModel);
   }
 
+  const ACTION_SWITCH = `🔄  Switch AI Provider (Google Gemini [100% Free], Local AI, Cloudflare)`;
+  const ACTION_CONFIG = `🔑  Configure / Enter API Key for ${getProviderDisplayName(provider)}`;
+  const ACTION_PROCEED = `▶   Proceed anyway with "${failedModel}" (skip verification)`;
+  const ACTION_CANCEL = `${t.muted("Cancel / Exit")}`;
+
   const choices = [
+    ACTION_SWITCH,
+    ACTION_CONFIG,
+    ACTION_PROCEED,
     ...availableModels,
-    `${t.accent(`▶  Proceed anyway with "${failedModel}" (skip verification)`)}`,
-    `${t.primary("⚙  Switch Provider (Google, Cloudflare, OpenCode, Local)")}`,
-    `${t.muted("Cancel / Exit")}`,
+    ACTION_CANCEL,
   ];
 
-  const choice = await select("Choose a working model or switch provider", choices, {
+  const choice = await select("Choose how to resolve or pick a model", choices, {
     allowCustom: true,
     defaultIndex: 0,
   });
@@ -557,11 +516,11 @@ async function promptRecovery(
     return { provider, model: customModel, apiKey, upstreamUrl };
   }
 
-  if (choice.index === choices.length - 1) {
+  if (choice.value === ACTION_CANCEL) {
     return null;
   }
 
-  if (choice.index === choices.length - 2) {
+  if (choice.value === ACTION_SWITCH) {
     const detectedLocal = await detectRunningLocalEngine();
     const newProvider = await selectProviderInteractive(detectedLocal ? `${detectedLocal.name}` : null);
 
@@ -611,7 +570,37 @@ async function promptRecovery(
     };
   }
 
-  if (choice.index === choices.length - 3) {
+  if (choice.value === ACTION_CONFIG) {
+    if (provider === "opencode") {
+      console.log(`\n  Enter your OpenCode API key from ${t.secondary("https://opencode.ai/console")}:`);
+      const newKey = await input("OpenCode API Key", undefined, true);
+      const clean = newKey.trim();
+      if (clean) {
+        storeOpenCodeApiKey(clean);
+        badge("success", "OpenCode API key saved");
+        return { provider, model: failedModel, apiKey: clean, upstreamUrl };
+      }
+    } else if (provider === "google") {
+      const newKey = await input("Google AI Studio API Key", undefined, true);
+      const clean = newKey.trim();
+      if (clean) {
+        storeGoogleApiKey(clean);
+        badge("success", "Google API key saved");
+        return { provider, model: failedModel, apiKey: clean, upstreamUrl };
+      }
+    } else if (provider === "cloudflare") {
+      const newKey = await input("Cloudflare API Token", undefined, true);
+      const clean = newKey.trim();
+      if (clean) {
+        storeCloudflareApiToken(clean);
+        badge("success", "Cloudflare API token saved");
+        return { provider, model: failedModel, apiKey: clean, upstreamUrl };
+      }
+    }
+    return { provider, model: failedModel, apiKey, upstreamUrl };
+  }
+
+  if (choice.value === ACTION_PROCEED) {
     return {
       provider,
       model: failedModel,

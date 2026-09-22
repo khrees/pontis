@@ -585,4 +585,31 @@ describe('POST /v1/messages — Anthropic endpoint', () => {
     expect(capturedUrl).toBe('https://opencode.ai/zen/v1/chat/completions');
     expect(capturedBody!.model).toBe('deepseek-v4-flash-free');
   });
+
+  it('allows free OpenCode models without an API key', async () => {
+    process.env.PONTIS_PROVIDER = 'opencode';
+    let capturedUrl = '';
+    let capturedHeaders: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url, init?: RequestInit) => {
+        capturedUrl = url.toString();
+        capturedHeaders = init?.headers;
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'big-pickle', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    expect(capturedUrl).toContain('opencode.ai/zen/v1');
+    expect(capturedHeaders.Authorization).toBeUndefined();
+  });
 });

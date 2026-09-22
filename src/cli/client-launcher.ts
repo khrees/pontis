@@ -75,7 +75,7 @@ export function setupPiProvider(apiKey: string, model?: string, proxyUrl = PROXY
       ...((existing.providers as Record<string, unknown>) || {}),
       [PI_PROVIDER_NAME]: {
         baseUrl: `${proxyUrl}/v1`,
-        apiKey,
+        apiKey: apiKey || "pontis",
         api: "openai-completions",
         models: [
           {
@@ -343,15 +343,19 @@ export async function testConnectivity(
 ): Promise<boolean> {
   const spin = createSpinner("Verifying API connection...");
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "x-opencode-session": "pontis-connectivity-check",
+      "x-opencode-client": "pontis",
+    };
+    if (apiKey && apiKey !== "pontis" && apiKey !== "dummy") {
+      headers["x-api-key"] = apiKey;
+    }
+
     const res = await fetch(`${proxyUrl}/v1/messages`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "x-opencode-session": "pontis-connectivity-check",
-        "x-opencode-client": "pontis",
-      },
+      headers,
       body: JSON.stringify({
         model,
         max_tokens: 16,

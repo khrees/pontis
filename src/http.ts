@@ -205,9 +205,10 @@ export function openaiAuthHeaders(
   incomingRequest?: Request,
   model?: string,
 ): Record<string, string> {
+  const isDummy = !key || key === "pontis" || key === "dummy";
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...(key ? { Authorization: `Bearer ${key}` } : {}),
+    ...(!isDummy ? { Authorization: `Bearer ${key}` } : {}),
   };
 
   const isOpenCode =

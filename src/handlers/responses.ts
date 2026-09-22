@@ -6,7 +6,7 @@ import {
 import { getUpstream, resolveModel, selectUpstream } from "../config";
 import { getModel } from "../env";
 import { fetchWithTimeout, jsonResponse, openaiAuthHeaders, passthroughResponse, SSE_HEADERS, upstreamErrorResponse, wrapProxyRequest } from "../http";
-import { isResponsesApiModel, injectDecoyToolsIfNeeded } from "../opencode-models";
+import { isResponsesApiModel, injectDecoyToolsIfNeeded, isFreeOpenCodeModel } from "../opencode-models";
 import { debugLog, warnLog } from "../logger";
 import { responseCache } from "../responses-cache";
 import type { OpenAIMessage, OpenAIResponse, ResponsesApiRequest, ResponsesApiUsage } from "../types";
@@ -112,7 +112,15 @@ export async function handleResponsesRequest(
     req.model = resolvedModel;
 
     const upstream = selectUpstream(request, routeUpstream, resolvedModel);
-    const authErr = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
+    const isFree = isFreeOpenCodeModel(resolvedModel);
+    const isDummy = !key || key === "pontis" || key === "dummy";
+    const authErr = upstream.includes("opencode.ai")
+      ? !isDummy
+        ? validateApiKey(key)
+        : !isFree
+          ? validateApiKey(key)
+          : null
+      : null;
     if (authErr) return authErrorResponse(authErr);
 
     debugLog(

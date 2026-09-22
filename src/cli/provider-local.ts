@@ -57,6 +57,8 @@ export async function selectLocalEngineInteractive(): Promise<string> {
   return LOCAL_ENGINES[result.index].url;
 }
 
+export const DEFAULT_LOCAL_MODEL = "llama3";
+
 export const KNOWN_OLLAMA_MODELS: readonly string[] = [
   "deepseek-v4.1-flash",
   "deepseek-v4-flash:0731",
@@ -328,8 +330,8 @@ export async function setupLocalInteractive(): Promise<{
       { name: "Others", count: groups.others.length, hint: "Meta Llama, Google Gemma, Mistral, Microsoft", list: groups.others },
     ].filter((c) => c.count > 0);
 
-    const catChoices = categories.map((c, i) =>
-      `${t.bold(String(i + 1).padStart(2))} ${t.primary(c.name.padEnd(12))} ${t.muted(`${c.count} model${c.count === 1 ? "" : "s"}`)} · ${t.dim(c.hint)}`
+    const catChoices = categories.map((c) =>
+      `${t.primary(c.name.padEnd(12))} ${t.muted(`${c.count} model${c.count === 1 ? "" : "s"}`)} · ${t.dim(c.hint)}`
     );
 
     const catResult = await select("Pick local model category", catChoices, {

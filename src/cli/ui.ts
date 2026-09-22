@@ -176,19 +176,35 @@ export function createSpinner(message: string) {
 }
 
 /** Readline-based input prompt */
-export async function input(question: string, defaultValue?: string, sensitive = false): Promise<string> {
+export async function input(
+  question: string,
+  defaultValue?: string,
+  sensitive = false,
+  allowBack = false,
+): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const displayDefault = sensitive && defaultValue ? redactKey(defaultValue) : defaultValue;
   const suffix = displayDefault ? ` ${t.muted(`[${displayDefault}]`)}` : "";
+  const backHint = allowBack ? ` ${t.dim("(:back to return)")}` : "";
   const trimmed = question.trimEnd();
   const formattedPrompt = trimmed.endsWith(":") ? trimmed : `${trimmed}:`;
   return new Promise((resolve) => {
     let settled = false;
-    rl.question(`  ${t.secondary("?")} ${formattedPrompt}${suffix} `, (answer) => {
+    rl.question(`  ${t.secondary("?")} ${formattedPrompt}${suffix}${backHint} `, (answer) => {
       if (settled) return;
       settled = true;
       rl.close();
-      resolve(answer.trim() || defaultValue || "");
+      const raw = answer.trim();
+      if (
+        allowBack &&
+        (raw.toLowerCase() === ":b" ||
+          raw.toLowerCase() === ":back" ||
+          raw.toLowerCase() === ":prev")
+      ) {
+        resolve("__BACK__");
+        return;
+      }
+      resolve(raw || defaultValue || "");
     });
     // If stdin closes (EOF / non-interactive pipe) before an answer, the
     // question callback never fires — without this the CLI hangs forever.
@@ -254,6 +270,14 @@ export interface SelectOptions {
   defaultIndex?: number;
   customLabel?: string;
   pageSize?: number;
+  allowBack?: boolean;
+  backLabel?: string;
+}
+
+export interface SelectResult<T extends string = string> {
+  value: T;
+  index: number;
+  isBack?: boolean;
 }
 
 /** Numbered selection menu with keyboard navigation (Tab/Shift-Tab, Arrow keys, Numbers, PageUp/Down, Enter) */
@@ -261,17 +285,22 @@ export async function select<T extends string>(
   label: string,
   options: T[],
   config: SelectOptions = {},
-): Promise<{ value: T; index: number }> {
+): Promise<SelectResult<T>> {
   const allowCustom = config.allowCustom ?? true;
+  const allowBack = config.allowBack ?? false;
   const rawCustomLabel = config.customLabel || "Custom (enter manually)";
   const cleanCustomLabel = rawCustomLabel.replace(/^✏️\s*/, "").trim();
+  const backLabel = config.backLabel || "← Back";
 
-  const items: { label: string; value: T; isCustom?: boolean }[] = options.map((opt) => ({
+  const items: { label: string; value: T; isCustom?: boolean; isBack?: boolean }[] = options.map((opt) => ({
     label: opt,
     value: opt,
   }));
   if (allowCustom) {
     items.push({ label: cleanCustomLabel || "Custom (enter manually)", value: "" as T, isCustom: true });
+  }
+  if (allowBack) {
+    items.push({ label: backLabel, value: "__BACK__" as T, isBack: true });
   }
 
   const initialIndex =
@@ -317,13 +346,21 @@ export async function select<T extends string>(
 
       if (answer === "") {
         const item = items[initialIndex];
-        return { value: item.value, index: item.isCustom ? -1 : initialIndex };
+        return {
+          value: item.value,
+          index: item.isCustom ? -1 : item.isBack ? -2 : initialIndex,
+          isBack: item.isBack,
+        };
       }
 
       const num = parseInt(answer, 10);
       if (!isNaN(num) && num >= 1 && num <= extra) {
         const item = items[num - 1];
-        return { value: item.value, index: item.isCustom ? -1 : num - 1 };
+        return {
+          value: item.value,
+          index: item.isCustom ? -1 : item.isBack ? -2 : num - 1,
+          isBack: item.isBack,
+        };
       }
       console.log(`  ${t.warning("Please enter 1–" + extra)}`);
     }
@@ -343,7 +380,10 @@ export async function select<T extends string>(
         process.stdout.write(`\x1B[${renderedLines}A\x1B[0J`);
       }
 
-      let output = `  ${t.secondary("?")} ${t.bold(label)} ${t.muted("(Tab/↑↓ navigate, Enter select)")}\n`;
+      const navHint = allowBack
+        ? "(Tab/↑↓ navigate, Enter select, Esc/← Back)"
+        : "(Tab/↑↓ navigate, Enter select)";
+      let output = `  ${t.secondary("?")} ${t.bold(label)} ${t.muted(navHint)}\n`;
       let lines = 1;
 
       const pageSize = Math.min(items.length, PAGE_LIMIT);
@@ -484,7 +524,11 @@ export async function select<T extends string>(
           render();
           cleanup();
           const item = items[selectedIndex];
-          resolve({ value: item.value, index: item.isCustom ? -1 : selectedIndex });
+          resolve({
+            value: item.value,
+            index: item.isCustom ? -1 : item.isBack ? -2 : selectedIndex,
+            isBack: item.isBack,
+          });
           return;
         }
       }
@@ -504,6 +548,22 @@ export async function select<T extends string>(
         return;
       }
 
+      // Back navigation via Left Arrow or Backspace
+      if (
+        allowBack &&
+        (name === "left" ||
+          seq === "\x1B[D" ||
+          (name === "backspace" && numberBuffer === ""))
+      ) {
+        cleanup();
+        resolve({
+          value: (config.backLabel || "Back") as T,
+          index: -2,
+          isBack: true,
+        });
+        return;
+      }
+
       // Confirm (Enter, Return, Space, \r, \n)
       if (
         name === "return" ||
@@ -515,13 +575,25 @@ export async function select<T extends string>(
       ) {
         cleanup();
         const item = items[selectedIndex];
-        resolve({ value: item.value, index: item.isCustom ? -1 : selectedIndex });
+        resolve({
+          value: item.value,
+          index: item.isCustom ? -1 : item.isBack ? -2 : selectedIndex,
+          isBack: item.isBack,
+        });
         return;
       }
 
-      // Escape — treat as cancel (same as Ctrl+C).
+      // Escape — if allowBack, navigate back; otherwise cancel
       if (name === "escape" || seq === "\x1B") {
         cleanup();
+        if (allowBack) {
+          resolve({
+            value: (config.backLabel || "Back") as T,
+            index: -2,
+            isBack: true,
+          });
+          return;
+        }
         console.log(`\n  ${t.muted("Cancelled.")}`);
         process.exit(130);
       }
