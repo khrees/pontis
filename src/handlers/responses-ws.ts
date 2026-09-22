@@ -22,7 +22,6 @@ const RESPONSE_TTL_MS = 5 * 60 * 1000; // 5 minutes, matches the HTTP cache defa
 const responseStore = new Map<string, StoredResponse>();
 
 function pruneResponseStore(now: number = Date.now()): void {
-  // Drop expired entries.
   for (const [id, r] of responseStore) {
     if (now - r.storedAt > RESPONSE_TTL_MS) responseStore.delete(id);
   }
@@ -393,9 +392,3 @@ export function storeResponse(response: CachedResponse): void {
   pruneResponseStore();
 }
 
-/**
- * Remove a response from the in-memory store.
- */
-export function removeResponse(responseId: string): void {
-  responseStore.delete(responseId);
-}

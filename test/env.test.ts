@@ -9,7 +9,6 @@ import {
   getUpstreamFormat,
   getPort,
   getHost,
-  getRedirectPort,
   getZenUpstream,
   getGoUpstream,
   getMaxBufferBytes,
@@ -19,7 +18,6 @@ import {
   getMinKeyLength,
   isCodexMode,
   getTimeoutMs,
-  hasProcess,
   isDebug,
 } from "../src/env";
 
@@ -35,7 +33,6 @@ describe("env accessor helpers", () => {
     delete process.env.PONTIS_PORT;
     delete process.env.PORT;
     delete process.env.PONTIS_HOST;
-    delete process.env.PONTIS_REDIRECT_PORT;
     delete process.env.PONTIS_ZEN_UPSTREAM;
     delete process.env.PONTIS_GO_UPSTREAM;
     delete process.env.PONTIS_MAX_BUFFER_MB;
@@ -93,7 +90,6 @@ describe("env accessor helpers", () => {
     expect(getUpstreamFormat()).toBe("openai");
     expect(getPort()).toBe(8787);
     expect(getHost()).toBe("127.0.0.1");
-    expect(getRedirectPort()).toBe(8443);
     expect(getZenUpstream()).toBe("https://opencode.ai/zen/v1");
     expect(getGoUpstream()).toBe("https://opencode.ai/zen/go/v1");
     expect(getMaxBufferBytes()).toBe(5 * 1024 * 1024);
@@ -103,7 +99,6 @@ describe("env accessor helpers", () => {
     expect(getMinKeyLength()).toBe(32);
     expect(isCodexMode()).toBe(false);
     expect(getTimeoutMs()).toBe(120000);
-    expect(hasProcess()).toBe(true);
     expect(isDebug()).toBe(false);
   });
 

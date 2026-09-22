@@ -8,13 +8,12 @@ import { PROXY_URL } from "./proxy-manager";
 import { PI_AGENT_DIR, PI_MODELS_FILE, OPENCODE_AUTH_FILE, OPENCODE_DATA_DIR } from "./config";
 import {
   CLIENTS,
-  isInstalled,
   ensureClientInstalled,
   resolveClientBinary,
   type ClientName,
 } from "./install-engine";
 
-export function autoApproveClaudeKey(apiKey: string) {
+function autoApproveClaudeKey(apiKey: string) {
   try {
     const configFile = join(homedir(), ".claude.json");
     const keySuffix = apiKey.slice(-20);
@@ -46,10 +45,6 @@ export function autoApproveClaudeKey(apiKey: string) {
   } catch {}
 }
 
-export function clientBinaryExists(name: ClientName): boolean {
-  return isInstalled(name);
-}
-
 export async function ensureClientReady(
   name: ClientName,
   autoInstall?: boolean,
@@ -61,17 +56,7 @@ export async function ensureClientReady(
 }
 
 const PI_PROVIDER_NAME = "pontis";
-
-export function piBinaryExists(): boolean {
-  return isInstalled("pi");
-}
-
-export async function ensurePiInstalled(): Promise<boolean> {
-  return ensureClientReady("pi", true);
-}
-
-export const PI_SETTINGS_FILE = join(PI_AGENT_DIR, "settings.json");
-export const PI_AUTH_FILE = join(PI_AGENT_DIR, "auth.json");
+const PI_SETTINGS_FILE = join(PI_AGENT_DIR, "settings.json");
 
 export function setupPiProvider(apiKey: string, model?: string, proxyUrl = PROXY_URL): void {
   mkdirSync(PI_AGENT_DIR, { recursive: true, mode: 0o700 });
@@ -364,10 +349,12 @@ export async function testConnectivity(
         "Content-Type": "application/json",
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
+        "x-opencode-session": "pontis-connectivity-check",
+        "x-opencode-client": "pontis",
       },
       body: JSON.stringify({
         model,
-        max_tokens: 5,
+        max_tokens: 16,
         messages: [{ role: "user", content: "hi" }],
       }),
       signal: AbortSignal.timeout(10000),
@@ -386,6 +373,16 @@ export async function testConnectivity(
     const errorMsg = errorObj?.error?.message || errorObj?.message;
     const lowerMsg = typeof errorMsg === "string" ? errorMsg.toLowerCase() : "";
 
+    const isOptInError = lowerMsg.includes("opt in") || lowerMsg.includes("opt-in");
+    if (isOptInError) {
+      spin.stop({
+        type: "error",
+        text: `Model error (HTTP ${res.status}): ${errorMsg}`,
+      });
+      console.log(`  ${t.warning(SYM.warn)} This Go model needs data-sharing opt-in at the URL above, or pick a Zen model instead.\n`);
+      return false;
+    }
+
     const isModelError =
       errorObj?.error?.type === "ModelError" ||
       errorObj?.type === "ModelError" ||
@@ -401,6 +398,36 @@ export async function testConnectivity(
         console.log(`  ${t.muted(bodyText.slice(0, 200))}\n`);
       }
       console.log(`  ${t.warning(SYM.warn)} Pick a different model with: ${t.primary("pontis models")}, then ${t.primary("pontis config set model <id>")}\n`);
+      return false;
+    }
+
+    const isFreeTierError =
+      errorObj?.error?.type === "FreeTierError" ||
+      errorObj?.type === "FreeTierError" ||
+      lowerMsg.includes("freetiererror") ||
+      lowerMsg.includes("free tier can only be used from within opencode");
+
+    if (isFreeTierError) {
+      spin.stop({
+        type: "error",
+        text: `OpenCode Free Tier error (HTTP ${res.status}): ${errorMsg || "OpenCode's free tier can only be used from within OpenCode"}`,
+      });
+      console.log(`  ${t.warning(SYM.warn)} Pontis sends OpenCode-compatible headers, but the gateway still rejected this request.`);
+      console.log(`  ${t.warning(SYM.warn)} Try a paid model instead, add credits at ${t.secondary("https://opencode.ai/console")}, or use 100% free Google AI Studio: ${t.primary("pontis auth set google")}\n`);
+      return false;
+    }
+
+    const isFundsError =
+      res.status === 402 ||
+      lowerMsg.includes("insufficient account funds") ||
+      lowerMsg.includes("insufficient funds");
+
+    if (isFundsError) {
+      spin.stop({
+        type: "error",
+        text: `Account error (HTTP ${res.status}): ${errorMsg || "Insufficient account funds"}`,
+      });
+      console.log(`  ${t.warning(SYM.warn)} Top up credits at ${t.secondary("https://opencode.ai/console")}, or switch to 100% free Google AI Studio: ${t.primary("pontis auth set google")}\n`);
       return false;
     }
 
@@ -432,17 +459,31 @@ export async function testConnectivity(
       return false;
     }
 
+    const isCloudPullModel = model.endsWith(":cloud") || model.includes(":cloud-");
     spin.stop({ type: "error", text: `API request failed (HTTP ${res.status})` });
     if (bodyText) {
       console.log(`  ${t.muted(bodyText.slice(0, 200))}\n`);
     }
+    if (isCloudPullModel) {
+      console.log(`  ${t.warning(SYM.warn)} "${model}" is an Ollama cloud-pull model that requires internet access.\n`);
+      console.log(`  ${t.muted("Try a locally-cached model instead (one without :cloud suffix).")}\n`);
+    }
     return false;
   } catch (err: any) {
+    const isCloudPullModel = model.endsWith(":cloud") || model.includes(":cloud-");
     spin.stop({
       type: "error",
-      text: `Could not reach API: ${err?.message || "connection failed"}`,
+      text: isCloudPullModel
+        ? `Cloud-pull model "${model}" is not available — not cached locally`
+        : `Could not reach API: ${err?.message || "connection failed"}`,
     });
-    console.log(`  ${t.warning(SYM.warn)} Ensure the proxy upstream is reachable and credentials are valid.\n`);
+    if (isCloudPullModel) {
+      console.log(`  ${t.warning(SYM.warn)} Ollama cloud-pull models (":cloud" suffix) must be downloaded before use.\n`);
+      console.log(`  ${t.muted(`Run: ollama pull ${model}`)}\n`);
+      console.log(`  ${t.muted("Or pick a locally-cached model from the recovery menu.")}\n`);
+    } else {
+      console.log(`  ${t.warning(SYM.warn)} Ensure the proxy upstream is reachable and credentials are valid.\n`);
+    }
     return false;
   }
 }

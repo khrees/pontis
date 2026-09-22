@@ -42,11 +42,61 @@ export const KNOWN_MODEL_METADATA: Record<string, Partial<ModelMetadata>> = {
   "nemotron-3-ultra-free": {
     context_window: 131072,
   },
+  "nemotron-3-super-free": {
+    context_window: 131072,
+  },
+  "nemotron-3.5-lightning-free": {
+    context_window: 131072,
+  },
+  "ling-3.0-flash-fin-free": {
+    context_window: 131072,
+  },
+  "muse-spark-1.3-contributor-free": {
+    context_window: 131072,
+    supports_reasoning: true,
+  },
   "north-mini-code-free": {
     context_window: 65536,
     max_output_tokens: 8192,
   },
   "qwen3.6-plus": {
+    context_window: 131072,
+    max_output_tokens: 8192,
+  },
+  "qwen3.5-plus": {
+    context_window: 131072,
+    max_output_tokens: 8192,
+  },
+  "gpt-5.4-mini": {
+    context_window: 128000,
+    max_output_tokens: 16384,
+    supports_reasoning: true,
+  },
+  "gpt-5.3-codex": {
+    context_window: 128000,
+    max_output_tokens: 16384,
+    supports_reasoning: true,
+  },
+  "claude-sonnet-4-6": {
+    context_window: 200000,
+    max_output_tokens: 16384,
+    supports_reasoning: true,
+  },
+  "claude-3-5-haiku": {
+    context_window: 200000,
+    max_output_tokens: 8192,
+  },
+  "kimi-k2.6": {
+    context_window: 262144,
+    max_output_tokens: 8192,
+    supports_reasoning: true,
+  },
+  "glm-5.1": {
+    context_window: 131072,
+    max_output_tokens: 8192,
+    supports_reasoning: true,
+  },
+  "minimax-m2.7": {
     context_window: 131072,
     max_output_tokens: 8192,
   },

@@ -31,10 +31,14 @@ import {
   VERSION,
   createSpinner,
 } from "./ui";
-import { fetchWorkingOpenCodeModels } from "./provider-opencode";
+import { fetchOpenCodeModelsGrouped } from "./provider-opencode";
 import { isFreeOpenCodeModel } from "../opencode-models";
 import { fetchLocalModels } from "./provider-local";
-import { fetchCloudflareModels } from "./provider-cloudflare";
+import {
+  fetchCloudflareModels,
+  KNOWN_CLOUDFLARE_MODELS,
+  categorizeCloudflareModels,
+} from "./provider-cloudflare";
 import { fetchGoogleModels } from "./provider-google";
 import { PORT, PROXY_URL } from "./proxy-manager";
 import {
@@ -63,7 +67,6 @@ import {
   savePreferences,
   resetPreferences,
 } from "./preferences";
-import { isHostsEntryActive, isPfRuleActive } from "./codex-redirect";
 
 const program = new Command();
 
@@ -223,20 +226,6 @@ program
   .description("Remove saved API key / credentials for a provider")
   .action(async (provider) => {
     await cmdAuthRemove(provider);
-  });
-
-program
-  .command("update-key [key]")
-  .description("Update OpenCode API key (alias to: pontis auth set opencode)")
-  .action(async (key) => {
-    await cmdAuthSet("opencode", key);
-  });
-
-program
-  .command("reset-cloudflare")
-  .description("Clear saved Cloudflare credentials (alias to: pontis auth remove cloudflare)")
-  .action(async () => {
-    await cmdAuthRemove("cloudflare");
   });
 
 const clientsCmd = program
@@ -506,31 +495,57 @@ program
           const spin = jsonMode
             ? null
             : createSpinner("Fetching models from Cloudflare...");
-          const models = await fetchCloudflareModels(accountId, apiToken);
+          const rawModels = await fetchCloudflareModels(accountId, apiToken);
+          const modelList = rawModels.length > 0 ? rawModels : [...KNOWN_CLOUDFLARE_MODELS];
+          const groups = categorizeCloudflareModels(modelList);
+
           if (spin) {
             spin.stop(
-              models.length > 0
+              rawModels.length > 0
                 ? {
                     type: "success",
-                    text: `Found ${models.length} model${models.length === 1 ? "" : "s"}`,
+                    text: `Found ${rawModels.length} Cloudflare model${rawModels.length === 1 ? "" : "s"}`,
                   }
-                : { type: "warning", text: "No models returned from Cloudflare" },
+                : { type: "warning", text: "No models returned from Cloudflare API — showing known catalog" },
             );
           }
           if (jsonMode) {
             outputJson({
               provider: "cloudflare",
-              models: models.map((id) => ({ id })),
+              groups: {
+                free: groups.free.map((id) => ({ id })),
+                frontier: groups.frontier.map((id) => ({ id })),
+                chinese: groups.chinese.map((id) => ({ id })),
+                others: groups.others.map((id) => ({ id })),
+              },
+              models: groups.all.map((id) => ({ id })),
             });
           }
-          if (models.length === 0) {
+          if (rawModels.length === 0) {
             badge(
               "warning",
-              "No models found. Check your API key and Account ID.",
+              "No models returned from Cloudflare API. Showing verified 2026 catalog.",
             );
-          } else {
-            section("Available Cloudflare Models");
-            for (const m of models) kv("Model", t.primary(m));
+          }
+
+          if (groups.free.length > 0) {
+            section(`Free Models (${groups.free.length}) · Workers Free allocation`);
+            for (const m of groups.free) kv("Free", t.success(m));
+          }
+
+          if (groups.frontier.length > 0) {
+            section(`Frontier Models (${groups.frontier.length}) · Flagship reasoning & coding`);
+            for (const m of groups.frontier) kv("Frontier", t.primary(m));
+          }
+
+          if (groups.chinese.length > 0) {
+            section(`Chinese Models (${groups.chinese.length}) · DeepSeek, GLM, Kimi, Qwen`);
+            for (const m of groups.chinese) kv("Chinese", t.accent(m));
+          }
+
+          if (groups.others.length > 0) {
+            section(`Others Models (${groups.others.length}) · Meta, Google, Mistral, NVIDIA, IBM`);
+            for (const m of groups.others) kv("Others", t.dim(m));
           }
           break;
         }
@@ -550,30 +565,45 @@ program
           }
           const spin = jsonMode
             ? null
-            : createSpinner("Fetching models from OpenCode...");
-          const models = await fetchWorkingOpenCodeModels(apiKey);
+            : createSpinner("Fetching live available models from OpenCode...");
+          const groups = await fetchOpenCodeModelsGrouped(apiKey);
+          const total = groups.combined.length;
           if (spin)
             spin.stop(
-              models.length > 0
-                ? {
-                    type: "success",
-                    text: `${models.length} model${models.length === 1 ? "" : "s"} available`,
-                  }
+              total > 0
+                ? { type: "success", text: `${total} OpenCode models available (Inference API)` }
                 : { type: "warning", text: "No models found" },
             );
           if (jsonMode) {
             outputJson({
               provider: "opencode",
-              models: models.map((id) => ({ id, free: isFreeOpenCodeModel(id) })),
+              free: groups.free.map((id) => ({ id, free: true })),
+              frontier: groups.frontier.map((id) => ({ id, free: false })),
+              chinese: groups.chinese.map((id) => ({ id, free: false })),
+              others: groups.others.map((id) => ({ id, free: false })),
+              zen: groups.zen.map((id) => ({ id, free: isFreeOpenCodeModel(id) })),
+              go: groups.go.map((id) => ({ id, free: false })),
+              models: groups.combined.map((id) => ({ id, free: isFreeOpenCodeModel(id) })),
             });
           }
-          if (models.length === 0) {
+          if (total === 0) {
             badge("warning", "No models found. Check your API key.");
           } else {
-            section("Available OpenCode Models");
-            for (const m of models) {
-              const tag = isFreeOpenCodeModel(m) ? t.secondary(" [Free]") : t.muted(" [Paid/Go]");
-              kv("Model", `${t.primary(m)}${tag}`);
+            if (groups.free.length > 0) {
+              section(`Free (${groups.free.length})`);
+              for (const m of groups.free) kv("Model", t.primary(m));
+            }
+            if (groups.frontier.length > 0) {
+              section(`Frontier (${groups.frontier.length})`);
+              for (const m of groups.frontier) kv("Model", t.primary(m));
+            }
+            if (groups.chinese.length > 0) {
+              section(`Chinese (${groups.chinese.length})`);
+              for (const m of groups.chinese) kv("Model", t.primary(m));
+            }
+            if (groups.others.length > 0) {
+              section(`Others (${groups.others.length})`);
+              for (const m of groups.others) kv("Model", t.primary(m));
             }
           }
           break;
@@ -708,15 +738,6 @@ program
       kv("Debug", debug ? t.success("on") : t.muted("off"));
       kv("Logs", t.muted(PROXY_LOG));
 
-      const hostsActive = isHostsEntryActive();
-      const pfActive = isPfRuleActive();
-      if (hostsActive || pfActive) {
-        section("Codex Network Redirect");
-        kv("Hosts entry", hostsActive ? t.warning("active") : t.muted("inactive"));
-        kv("pf rule", pfActive ? t.warning("active") : t.muted("inactive"));
-        badge("info", "Stale redirect rules may break codex login");
-        badge("muted", "Clean up: sudo pontis cleanup-redirect");
-      }
 
       section("Supported Coding Agent CLIs");
       for (const c of clients) {
@@ -739,37 +760,6 @@ program
     }
   });
 
-program
-  .command("cleanup-redirect")
-  .description("Remove stale /etc/hosts entry and pf rule for api.openai.com")
-  .action(async () => {
-    try {
-      const hostsActive = isHostsEntryActive();
-      const pfActive = isPfRuleActive();
-
-      if (!hostsActive && !pfActive) {
-        badge("info", "No stale redirect rules found — nothing to clean up.");
-        return;
-      }
-
-      if (hostsActive) {
-        badge("warning", "Stale hosts entry found for api.openai.com");
-      }
-      if (pfActive) {
-        badge("warning", "Stale pf rule found for api.openai.com redirect");
-      }
-
-      console.log("  You may be prompted for your sudo password...\n");
-
-      const { ensureRedirectRemoved } = await import("./codex-redirect");
-      ensureRedirectRemoved();
-
-      badge("success", "Redirect rules cleaned up.");
-    } catch (e: any) {
-      console.error(`\n  ${t.error(SYM.cross)}  ${e.message}\n`);
-      process.exit(1);
-    }
-  });
 
 program.action(() => {
   const opts = program.opts();

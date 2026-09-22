@@ -291,7 +291,7 @@ function convertTools(reqTools: ResponsesApiTool[]): OpenAITool[] {
     }));
 }
 
-export function mergeConsecutiveMessages(messages: OpenAIMessage[]): OpenAIMessage[] {
+function mergeConsecutiveMessages(messages: OpenAIMessage[]): OpenAIMessage[] {
   if (messages.length === 0) return [];
   const merged: OpenAIMessage[] = [];
 

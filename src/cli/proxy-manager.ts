@@ -9,14 +9,6 @@ import { getPort } from "../env";
 export let PORT = getPort(8787);
 export let PROXY_URL = `http://localhost:${PORT}`;
 
-export function getActivePort(): number {
-  return PORT;
-}
-
-export function getActiveProxyUrl(): string {
-  return PROXY_URL;
-}
-
 /** Check if a local TCP port is free to bind. */
 export async function isPortAvailable(port: number, host = "127.0.0.1"): Promise<boolean> {
   return new Promise((resolve) => {
@@ -46,11 +38,7 @@ export interface ProxyInstance {
 }
 
 /** Tracked proxy instance for this process so SIGINT/SIGTERM can clean it up. */
-export let activeProxy: ProxyInstance | null = null;
-
-export function setActiveProxy(proxy: ProxyInstance | null) {
-  activeProxy = proxy;
-}
+let activeProxy: ProxyInstance | null = null;
 
 export function killActiveProxy() {
   if (activeProxy) {
@@ -61,8 +49,7 @@ export function killActiveProxy() {
   }
 }
 
-/** Register a one-shot shutdown handler. */
-export function onShutdown(handler: () => void) {
+function onShutdown(handler: () => void) {
   const done = () => {
     handler();
     process.exit(0);
@@ -71,7 +58,7 @@ export function onShutdown(handler: () => void) {
   process.on("SIGTERM", done);
 }
 
-export function needsProxyRebuild(): boolean {
+function needsProxyRebuild(): boolean {
   if (!existsSync(SRC_DIR)) return false;
   if (!existsSync(DIST_PROXY)) return true;
   try {
@@ -89,7 +76,7 @@ export function needsProxyRebuild(): boolean {
   }
 }
 
-export function buildProxy() {
+function buildProxy() {
   const spin = createSpinner("Building proxy bundle...");
   try {
     if (!existsSync(join(ROOT, "node_modules"))) {
@@ -104,7 +91,7 @@ export function buildProxy() {
   }
 }
 
-export function findNativeBinary(): string | null {
+function findNativeBinary(): string | null {
   for (const p of [
     join(ROOT, "bin", "pontis-proxy"),
     join(ROOT, "pontis-proxy"),
@@ -167,13 +154,11 @@ export async function startProxy(model: string, codexMode: boolean): Promise<Pro
 
   if (codexMode) {
     process.env.PONTIS_CODEX_MODE = "true";
-    process.env.PONTIS_TLS_PORT = "8443";
   }
   if (!codexMode && process.env.PONTIS_PROVIDER === "local") {
     process.env.PONTIS_MIN_KEY_LENGTH = "0";
   }
 
-  // Build if needed
   if (needsProxyRebuild()) buildProxy();
 
   const env = { ...process.env, PONTIS_PORT: String(targetPort), PONTIS_MODEL: model };

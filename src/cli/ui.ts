@@ -28,8 +28,6 @@ export const SYM = {
   spinner: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
 };
 
-export function splash() {}
-
 export function section(title: string) {
   console.log(`\n  ${t.primary(SYM.bullet)} ${t.bold(title)}`);
 }
@@ -60,12 +58,12 @@ export function badge(
  *  escapes don't end up in piped/logged output. */
 const IS_OUT_TTY = Boolean(process.stdout.isTTY);
 
-export function statusLine(text: string, symbol = SYM.dot) {
+function statusLine(text: string, symbol = SYM.dot) {
   if (!IS_OUT_TTY) return;
   process.stdout.write(`\r  ${t.muted(symbol)}  ${text}`);
 }
 
-export function clearLine() {
+function clearLine() {
   if (!IS_OUT_TTY) return;
   process.stdout.write("\r\x1b[K");
 }

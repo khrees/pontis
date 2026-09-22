@@ -130,11 +130,32 @@ overwritten) so existing credentials aren't bricked without warning.
 ```bash
 pontis auth list                # Check configured providers and key status
 pontis auth set google          # Save free Google AI Studio API key
-pontis auth set opencode        # Save OpenCode API key
+pontis auth set opencode        # Save OpenCode Service Account API key
 pontis auth set cloudflare      # Save Cloudflare Account ID & API Token
 pontis auth set local           # Set local endpoint (default: http://localhost:11434/v1)
 pontis auth clear               # Wipe all stored credentials
 ```
+
+### 🔑 OpenCode Authentication & Setup (Service Accounts)
+
+OpenCode manages API keys through Service Accounts on the **[OpenCode Console](https://opencode.ai/console)**:
+
+1. Log in to [opencode.ai/console](https://opencode.ai/console).
+2. Go to **Service Accounts** $\rightarrow$ Create a Service Account (name it **`pontis`**).
+3. Create and copy an API Key for the `pontis` service account.
+4. Save it into Pontis:
+   ```bash
+   pontis auth set opencode
+   # or export OPENCODE_API_KEY="sk-..."
+   ```
+
+> [!IMPORTANT]
+> **OpenCode Free Tier vs. Paid Models & `FreeTierError`:**
+> * **Free Models**: `nemotron-3-super-free`, `nemotron-3.5-lightning-free`, `ling-3.0-flash-fin-free`, `muse-spark-1.3-contributor-free`, `big-pickle`, `mimo-v2.5-free`.
+> * **Paid Models (Require console credits)**: `claude-sonnet-4-6`, `claude-3-5-haiku`, `gpt-5.4-mini`, `gpt-5.3-codex`, `kimi-k2.6`, `glm-5.1`, `minimax-m2.7`, `grok-build-0.1`, `qwen3.6-plus`. **Note that Kimi, GLM, Grok, and MiniMax are paid models, not free.**
+> * **`FreeTierError` Warning**: Calling free models via an external Service Account key can trigger:  
+>   `{"type":"error","error":{"type":"FreeTierError","message":"OpenCode's free tier can only be used from within OpenCode"}}`  
+>   OpenCode restricts free models from external automated API clients. To use OpenCode via Pontis with an SA token, add credits in [opencode.ai/console](https://opencode.ai/console) to access paid models. For **100% free external agent usage without credits**, switch to **Google AI Studio** (`pontis auth set google`) or **Local Ollama** (`pontis config set provider local`).
 
 ### Manage Agent CLIs
 ```bash
@@ -245,11 +266,34 @@ claude
      # or
      pontis auth set cloudflare
      ```
-  2. Verify that your OpenCode key is active at [opencode.ai/auth](https://opencode.ai/auth) $\rightarrow$ Zen $\rightarrow$ API Keys.
+  2. Verify that your OpenCode Service Account key is active at [opencode.ai/console](https://opencode.ai/console) $\rightarrow$ Service Accounts $\rightarrow$ `pontis`.
 </details>
 
 <details>
-<summary><b>4. Port 8787 Already in Use</b></summary>
+<summary><b>4. FreeTierError: OpenCode's free tier can only be used from within OpenCode</b></summary>
+
+* **Cause**: OpenCode blocks free models (`big-pickle`, `nemotron`, `ling`, `muse-spark`, `mimo`) from external automated API clients or Service Account tokens.
+* **Remedies**:
+  1. Add credits to your OpenCode account at [opencode.ai/console](https://opencode.ai/console) and switch to a paid model:
+     ```bash
+     pontis config set model gpt-5.4-mini
+     # or
+     pontis config set model claude-sonnet-4-6
+     ```
+  2. Switch to **Google AI Studio** for 100% free external agent usage:
+     ```bash
+     pontis auth set google
+     pontis config set provider google
+     pontis config set model gemini-3.6-flash
+     ```
+  3. Switch to **Local Ollama**:
+     ```bash
+     pontis config set provider local
+     ```
+</details>
+
+<details>
+<summary><b>5. Port 8787 Already in Use</b></summary>
 
 * **Cause**: An earlier proxy instance was left running in the background.
 * **Remedy**: Kill the orphaned process on port 8787:

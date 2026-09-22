@@ -154,7 +154,6 @@ export function streamAnthropicToOpenAI(anthropicStream: ReadableStream<Uint8Arr
             }
 
             case "message_stop":
-              // Nothing extra needed
               break;
           }
         }

@@ -123,6 +123,28 @@ describe("Connectivity Verification (testConnectivity)", () => {
     expect(fetchSpy).toHaveBeenCalled();
     fetchSpy.mockRestore();
   });
+
+  it("returns false and identifies FreeTierError when upstream restricts free models", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ type: "error", error: { type: "FreeTierError", message: "OpenCode's free tier can only be used from within OpenCode" } }), { status: 403 }),
+    );
+
+    const ok = await testConnectivity("sk-key", "big-pickle", "opencode");
+    expect(ok).toBe(false);
+    expect(fetchSpy).toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("returns false and identifies 402 Insufficient account funds", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { type: "server_error", message: "Upstream request failed: Insufficient account funds" } }), { status: 402 }),
+    );
+
+    const ok = await testConnectivity("sk-key", "minimax-m2.7", "opencode");
+    expect(ok).toBe(false);
+    expect(fetchSpy).toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
 });
 
 describe("Free-tier model detection (isFreeOpenCodeModel)", () => {
@@ -131,6 +153,27 @@ describe("Free-tier model detection (isFreeOpenCodeModel)", () => {
     expect(isFreeOpenCodeModel("big-pickle")).toBe(true);
     expect(isFreeOpenCodeModel("qwen3.7-plus")).toBe(false);
     expect(isFreeOpenCodeModel("@cf/meta/llama-3.3-70b")).toBe(false);
+  });
+
+  it("classifies nemotron, ling, muse-spark, big-pickle, and mimo as free", () => {
+    expect(isFreeOpenCodeModel("big-pickle")).toBe(true);
+    expect(isFreeOpenCodeModel("mimo-v2.5-free")).toBe(true);
+    expect(isFreeOpenCodeModel("nemotron-3-super-free")).toBe(true);
+    expect(isFreeOpenCodeModel("nemotron-3.5-lightning-free")).toBe(true);
+    expect(isFreeOpenCodeModel("ling-3.0-flash-fin-free")).toBe(true);
+    expect(isFreeOpenCodeModel("muse-spark-1.3-contributor-free")).toBe(true);
+  });
+
+  it("strictly rejects kimi, glm, grok, minimax, claude, gpt, gemini as non-free", () => {
+    expect(isFreeOpenCodeModel("kimi-k2.5")).toBe(false);
+    expect(isFreeOpenCodeModel("kimi-k2.6")).toBe(false);
+    expect(isFreeOpenCodeModel("glm-5")).toBe(false);
+    expect(isFreeOpenCodeModel("glm-5.1")).toBe(false);
+    expect(isFreeOpenCodeModel("grok-build-0.1")).toBe(false);
+    expect(isFreeOpenCodeModel("minimax-m2.7")).toBe(false);
+    expect(isFreeOpenCodeModel("claude-sonnet-4-6")).toBe(false);
+    expect(isFreeOpenCodeModel("gpt-5.4-mini")).toBe(false);
+    expect(isFreeOpenCodeModel("gemini-3.5-flash")).toBe(false);
   });
 
   it("identifies free models using naming patterns beyond -free suffix", () => {

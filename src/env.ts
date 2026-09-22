@@ -52,16 +52,16 @@ export function getHost(fallback = "127.0.0.1"): string {
   return getEnv("PONTIS_HOST", fallback);
 }
 
-export function getRedirectPort(fallback = 8443): number {
-  return getEnvAsNumber("PONTIS_REDIRECT_PORT", fallback, 1);
-}
-
 export function getZenUpstream(fallback = "https://opencode.ai/zen/v1"): string {
   return getEnv("PONTIS_ZEN_UPSTREAM", fallback);
 }
 
 export function getGoUpstream(fallback = "https://opencode.ai/zen/go/v1"): string {
   return getEnv("PONTIS_GO_UPSTREAM", fallback);
+}
+
+export function getInferenceUpstream(fallback = "https://opencode.ai/inference"): string {
+  return getEnv("PONTIS_INFERENCE_UPSTREAM", fallback);
 }
 
 export function getMaxBufferBytes(fallback = 5 * 1024 * 1024): number {
@@ -100,11 +100,6 @@ export function getTimeoutMs(fallback = 120000): number {
   if (val === undefined || val === "") return fallback;
   const n = parseInt(val, 10);
   return Number.isFinite(n) && n >= 1000 ? n : fallback;
-}
-
-/** Check whether the global `process` object exists (it won't in Workers). */
-export function hasProcess(): boolean {
-  return typeof process !== "undefined";
 }
 
 export function isDebug(): boolean {

@@ -227,8 +227,12 @@ describe("Responses API integration", () => {
     expect(response.status).toBe(200);
 
     const capturedBody = parseCapturedBody(fetchMock.mock.calls[0][1]?.body);
-    expect(capturedBody.tools).toHaveLength(1);
-    expect(capturedBody.tools![0].function.name).toBe("bash");
+    // big-pickle is a free-tier model, so Pontis injects the 'read' decoy tool
+    // alongside the original 'bash' to satisfy OpenCode's free-tier gate
+    expect(capturedBody.tools!.length).toBeGreaterThanOrEqual(2);
+    const toolNames = capturedBody.tools!.map((t: any) => t.function?.name || t.name);
+    expect(toolNames).toContain("bash");
+    expect(toolNames).toContain("read");
 
     fetchMock.mockRestore();
   });

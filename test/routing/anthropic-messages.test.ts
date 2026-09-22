@@ -83,7 +83,7 @@ describe('POST /v1/messages — Anthropic endpoint', () => {
     }));
   });
 
-  it('routes enterprise/paid models on root /v1/messages to OpenCode Go', async () => {
+  it('routes enterprise/paid models on root /v1/messages to OpenCode Go with session header', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
         status: 200,
@@ -101,7 +101,10 @@ describe('POST /v1/messages — Anthropic endpoint', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/go/v1/chat/completions', expect.objectContaining({
       method: 'POST',
-      headers: expect.objectContaining({ Authorization: `Bearer ${key}` }),
+      headers: expect.objectContaining({
+        Authorization: `Bearer ${key}`,
+        'x-opencode-session': expect.any(String),
+      }),
     }));
   });
 
@@ -455,7 +458,7 @@ describe('POST /v1/messages — Anthropic endpoint', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       'https://gateway.ai.cloudflare.com/v1/acc/gw/workers-ai/v1/chat/completions',
       expect.objectContaining({
-        body: expect.stringContaining('"model":"@cf/moonshotai/kimi-k2.6"'),
+        body: expect.stringContaining('"model":"@cf/meta/llama-3.3-70b-instruct-fp8-fast"'),
       }),
     );
     delete process.env.PONTIS_PROVIDER;
@@ -550,7 +553,7 @@ describe('POST /v1/messages — Anthropic endpoint', () => {
 
     await worker.fetch(request);
 
-    // Paid model → routes to Go endpoint (not Zen)
+    // Paid model → routes to Go endpoint
     expect(capturedUrl).toBe('https://opencode.ai/zen/go/v1/chat/completions');
     // Model ID must be preserved as-is
     expect(capturedBody!.model).toBe('deepseek-v4-flash');

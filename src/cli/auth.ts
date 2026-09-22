@@ -61,7 +61,7 @@ export function getAuthStatus(): AuthStatus {
     cloudflare: {
       configured: !!(cf.apiToken && cf.accountId),
       accountId: cf.accountId ? `${cf.accountId.slice(0, 4)}...${cf.accountId.slice(-4)}` : null,
-      gatewayId: cf.gatewayId || "default",
+      gatewayId: cf.gatewayId || null,
       tokenMasked: cf.apiToken ? redactKey(cf.apiToken) : null,
     },
     local: {
@@ -98,7 +98,8 @@ export function cmdAuthStatus(opts?: { json?: boolean }): void {
   }
 
   if (status.cloudflare.configured) {
-    const details = `Account: ${status.cloudflare.accountId} · Gateway: ${status.cloudflare.gatewayId} · Token: ${status.cloudflare.tokenMasked}`;
+    const routing = status.cloudflare.gatewayId ? `Gateway: ${status.cloudflare.gatewayId}` : "Direct Workers AI";
+    const details = `Account: ${status.cloudflare.accountId} · ${routing} · Token: ${status.cloudflare.tokenMasked}`;
     kv("Cloudflare", `${t.success("✓ Saved")}  ${t.muted(`(${details})`)}`);
   } else {
     kv("Cloudflare", `${t.muted("○ Not configured")}  ${t.muted("(Run: pontis auth set cloudflare)")}`);
@@ -165,10 +166,13 @@ export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise
       section("Configure OpenCode API Key");
       let key = keyArg;
       if (!key) {
-        console.log(`  Get your key at ${t.secondary("https://opencode.ai/auth")} → Zen → API Keys`);
-        key = await input("Paste your OpenCode API key", undefined, true);
+        console.log(`  1. Open ${t.secondary("https://opencode.ai/console")} in your browser`);
+        console.log(`  2. Create a Service Account (e.g. named ${t.bold('"pontis"')}) under Service Accounts`);
+        console.log(`  3. Generate and copy an API key for that Service Account`);
+        console.log(`  4. Paste the key below:`);
+        key = await input("Paste your OpenCode Service Account API key", undefined, true);
       }
-      if (!key) {
+      if (!key || !key.trim()) {
         badge("error", "API key cannot be empty.");
         process.exit(1);
       }
@@ -178,7 +182,7 @@ export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise
       break;
     }
     case "cloudflare": {
-      section("Configure Cloudflare AI Gateway");
+      section("Configure Cloudflare Workers AI / AI Gateway");
       const saved = getCloudflareConfigSaved();
 
       const accountId = await input("Paste your Cloudflare Account ID", saved.accountId);
@@ -187,11 +191,7 @@ export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise
         process.exit(1);
       }
 
-      const gatewayId = await input("Paste your Cloudflare AI Gateway ID", saved.gatewayId || "default");
-      if (!gatewayId) {
-        badge("error", "Gateway ID is required.");
-        process.exit(1);
-      }
+      const gatewayId = await input("Paste your Cloudflare AI Gateway ID (optional, press Enter for direct Workers AI)", saved.gatewayId || "");
 
       const apiToken = keyArg || (await input("Paste your Cloudflare API Token (API Key)", saved.apiToken, true));
       if (!apiToken) {
@@ -199,7 +199,7 @@ export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise
         process.exit(1);
       }
 
-      const config = { accountId: accountId.trim(), gatewayId: gatewayId.trim(), apiToken: apiToken.trim() };
+      const config = { accountId: accountId.trim(), gatewayId: gatewayId ? gatewayId.trim() : "", apiToken: apiToken.trim() };
       // Persist only non-secret fields to disk; the token lives in the vault.
       writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify({ accountId: config.accountId, gatewayId: config.gatewayId }, null, 2), {
         encoding: "utf-8",
@@ -207,7 +207,7 @@ export async function cmdAuthSet(providerArg?: string, keyArg?: string): Promise
       });
       storeCloudflareApiToken(config.apiToken);
 
-      badge("success", "Cloudflare AI Gateway configuration saved securely");
+      badge("success", "Cloudflare configuration saved securely");
       break;
     }
     case "local": {

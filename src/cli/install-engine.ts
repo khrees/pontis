@@ -326,18 +326,15 @@ export async function installClient(
 ): Promise<void> {
   const def = CLIENTS[name];
 
-  // Already installed?
   if (isInstalled(name)) {
     return;
   }
 
-  // Node version check
   const nodeIssue = checkNodeVersion(name);
   if (nodeIssue) {
     throw new InstallError(name, nodeIssue);
   }
 
-  // If interactive, prompt first
   if (options?.interactive !== false) {
     const ok = await confirm(
       `Install ${def.name}? (${def.installHint})`,
@@ -379,7 +376,6 @@ export async function installClient(
       throw new InstallError(name, `No install method defined for ${def.name}`);
     }
 
-    // Verify installation
     if (!isInstalled(name)) {
       // For npm --prefix installs, the binary might not be on PATH yet.
       // That's fine — the Pontis launcher adds ~/.pontis/clients/*/bin to PATH.
@@ -411,35 +407,6 @@ export async function installClient(
   }
 }
 
-/**
- * Install multiple clients. Continues on error.
- * Returns a map of successes and failures.
- */
-export async function installMany(
-  names: ClientName[],
-): Promise<{ ok: ClientName[]; failed: InstallError[] }> {
-  const ok: ClientName[] = [];
-  const failed: InstallError[] = [];
-
-  for (const name of names) {
-    try {
-      if (isInstalled(name)) {
-        ok.push(name);
-        continue;
-      }
-      await installClient(name);
-      ok.push(name);
-    } catch (e: any) {
-      if (e instanceof InstallError) {
-        failed.push(e);
-      } else {
-        failed.push(new InstallError(name, e.message || String(e)));
-      }
-    }
-  }
-
-  return { ok, failed };
-}
 
 /**
  * Ensure a specific client is installed.
@@ -454,7 +421,6 @@ export async function ensureClientInstalled(
 
   const def = CLIENTS[name];
 
-  // Node version check
   const nodeIssue = checkNodeVersion(name);
   if (nodeIssue) {
     badge("warning", nodeIssue);

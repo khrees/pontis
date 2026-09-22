@@ -1,11 +1,10 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   retrieveOpenCodeApiKey,
   retrieveCloudflareApiToken,
-  storeCloudflareApiToken,
   retrieveLocalApiKey,
   retrieveGoogleApiKey,
 } from "../secure-storage";
@@ -35,9 +34,6 @@ export const GOOGLE_DEFAULT_UPSTREAM = "https://generativelanguage.googleapis.co
 export const PI_AGENT_DIR = join(homedir(), ".pi", "agent");
 export const PI_MODELS_FILE = join(PI_AGENT_DIR, "models.json");
 
-// Client tools managed by Pontis install engine
-export const CLIENTS_DIR = join(PONTIS_DIR, "clients");
-
 // OpenCode data directory (managed by OpenCode itself, but we write auth entries)
 export const OPENCODE_DATA_DIR = join(homedir(), ".local", "share", "opencode");
 export const OPENCODE_AUTH_FILE = join(OPENCODE_DATA_DIR, "auth.json");
@@ -65,35 +61,19 @@ export function normalizeProvider(value?: string | null): ProviderType | null {
 }
 
 export function getCloudflareConfigSaved(): { apiToken?: string; accountId?: string; gatewayId?: string } {
-  // Try secure storage first for the token
-  const secureApiToken = retrieveCloudflareApiToken();
+  const apiToken = retrieveCloudflareApiToken();
 
-  // Legacy file may have accountId/gatewayId (and, in older versions, the token)
-  let legacy: Record<string, string | undefined> = {};
+  let conf: Record<string, string | undefined> = {};
   if (existsSync(CLOUDFLARE_CONFIG_FILE)) {
     try {
-      legacy = JSON.parse(readFileSync(CLOUDFLARE_CONFIG_FILE, "utf-8"));
+      conf = JSON.parse(readFileSync(CLOUDFLARE_CONFIG_FILE, "utf-8"));
     } catch {}
   }
 
-  // Migrate a legacy plaintext token into the encrypted vault and scrub it
-  // from the on-disk file so the token is never stored in plaintext.
-  if (legacy.apiToken) {
-    try {
-      if (!secureApiToken) storeCloudflareApiToken(legacy.apiToken);
-      const { apiToken: _omit, ...rest } = legacy;
-      writeFileSync(CLOUDFLARE_CONFIG_FILE, JSON.stringify(rest, null, 2), {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-    } catch {}
-  }
-
-  // Merge: prefer token from secure storage, take accountId/gatewayId from file
   return {
-    apiToken: secureApiToken || legacy.apiToken,
-    accountId: legacy.accountId,
-    gatewayId: legacy.gatewayId,
+    apiToken: apiToken ?? undefined,
+    accountId: conf.accountId,
+    gatewayId: conf.gatewayId,
   };
 }
 
@@ -125,10 +105,19 @@ export function getGoogleAuthToken(): string | null {
   return getGoogleApiKey();
 }
 
+export function getCloudflareUpstreamUrl(accountId: string, gatewayId?: string): string {
+  const cleanAccount = accountId.trim();
+  const cleanGateway = gatewayId?.trim();
+  if (cleanGateway && cleanGateway !== "direct" && cleanGateway !== "none") {
+    return `https://gateway.ai.cloudflare.com/v1/${cleanAccount}/${cleanGateway}/workers-ai/v1`;
+  }
+  return `https://api.cloudflare.com/client/v4/accounts/${cleanAccount}/ai/v1`;
+}
+
 export function getDefaultModelForProvider(provider?: ProviderType | string | null): string {
   switch (provider) {
     case "cloudflare":
-      return "@cf/moonshotai/kimi-k2.6";
+      return "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
     case "local":
       return "llama3";
     case "google":

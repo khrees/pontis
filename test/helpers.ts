@@ -86,8 +86,6 @@ export interface CapturedRequestBody {
   temperature?: number;
 }
 
-/** @deprecated Use CapturedRequestBody */
-export type CapturedChatRequest = CapturedRequestBody;
 
 export function parseCapturedBody(body: BodyInit | null | undefined): CapturedRequestBody {
   return JSON.parse(body as string) as CapturedRequestBody;

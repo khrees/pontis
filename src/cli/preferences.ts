@@ -12,7 +12,6 @@ export function getPreferencesFile(): string {
 }
 
 export const PONTIS_DIR = getPontisDir();
-export const PREFERENCES_FILE = getPreferencesFile();
 
 export type ProviderType = "opencode" | "local" | "cloudflare" | "google";
 

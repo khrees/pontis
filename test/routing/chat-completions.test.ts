@@ -76,4 +76,37 @@ describe('POST /v1/chat/completions', () => {
     expect(capturedBody!.model).toBe('mimo-v2.5-free');
     vi.restoreAllMocks();
   });
+
+  it('routes Go models to OpenCode Go and injects x-opencode-session on chat completions', async () => {
+    let capturedUrl = '';
+    let capturedHeaders: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url, init?: RequestInit) => {
+        capturedUrl = url.toString();
+        capturedHeaders = init?.headers;
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'authorization': `Bearer ${key}`,
+        'x-opencode-session': 'ses_aabbccddeeff01234567890ABc',
+      },
+      body: JSON.stringify({
+        model: 'kimi-k3',
+        messages: [{ role: 'user', content: 'hi' }]
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(capturedUrl).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+    expect(capturedHeaders['x-opencode-session']).toBe('ses_aabbccddeeff01234567890ABc');
+    expect(capturedHeaders['x-opencode-client']).toBe('pontis');
+  });
 });

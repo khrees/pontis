@@ -6,14 +6,16 @@ import {
   isCodexMode,
   getGoUpstream,
   getZenUpstream,
+  getInferenceUpstream,
   getEnv,
 } from "./env";
 import { extractApiKey, validateApiKey } from "./auth";
 import { InvalidApiKeyError } from "./errors";
-import { isFreeOpenCodeModel } from "./opencode-models";
+import { resolveOpenCodeTier } from "./opencode-models";
 
 export const GO_UPSTREAM = getGoUpstream("https://opencode.ai/zen/go/v1");
 export const ZEN_UPSTREAM = getZenUpstream("https://opencode.ai/zen/v1");
+export const OPENCODE_INFERENCE_BASE = getInferenceUpstream("https://opencode.ai/inference");
 export const GOOGLE_DEFAULT_UPSTREAM = "https://generativelanguage.googleapis.com/v1beta/openai";
 export const DEFAULT_UPSTREAM = GO_UPSTREAM;
 export const VISION_MODEL = "qwen3.6-plus";
@@ -54,6 +56,8 @@ const KNOWN_OPENCODE_PREFIXES = [
   "laguna",
   "muse",
   "ox",
+  "ling",
+  "jev",
 ];
 
 export type RouteConfig = {
@@ -66,7 +70,7 @@ export function getDefaultFreeModel(): string {
   const model = getModel();
   if (model) return model;
   if (getProvider() === "cloudflare") {
-    return "@cf/moonshotai/kimi-k2.6";
+    return "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
   }
   if (getProvider() === "local") {
     return "llama3";
@@ -135,6 +139,12 @@ export function routeConfig(request: Request): RouteConfig {
     return { path: remaining, upstream: ZEN_UPSTREAM, modelOverride: model };
   }
 
+  const inferencePath = stripPrefix(path, "/inference");
+  if (inferencePath) {
+    const { path: remaining, model } = extractModelSegment(inferencePath);
+    return { path: remaining, upstream: OPENCODE_INFERENCE_BASE, modelOverride: model };
+  }
+
   const { path: remaining, model } = extractModelSegment(path);
   const defaultUp = getProvider() === "google" ? GOOGLE_DEFAULT_UPSTREAM : DEFAULT_UPSTREAM;
   return { path: remaining, upstream: defaultUp, modelOverride: model };
@@ -176,9 +186,11 @@ export function selectUpstream(
   const path = new URL(request.url).pathname;
   if (path.startsWith("/go")) return GO_UPSTREAM;
   if (path.startsWith("/zen")) return ZEN_UPSTREAM;
+  if (path.startsWith("/inference")) return OPENCODE_INFERENCE_BASE;
 
   if (routeUpstream.includes("opencode.ai")) {
-    return isFreeOpenCodeModel(model) ? ZEN_UPSTREAM : GO_UPSTREAM;
+    const tier = resolveOpenCodeTier(model);
+    return tier === "go" ? GO_UPSTREAM : tier === "zen" ? ZEN_UPSTREAM : GO_UPSTREAM;
   }
   return routeUpstream;
 }
@@ -230,7 +242,10 @@ export function resolveModelAndUpstream(
   const baseUpstream = getUpstream(routeUpstream);
   const provider = getProvider();
   const isGoogle = provider === "google" || baseUpstream.includes("googleapis.com");
-  const isCloudflare = provider === "cloudflare" || baseUpstream.includes("gateway.ai.cloudflare.com");
+  const isCloudflare =
+    provider === "cloudflare" ||
+    baseUpstream.includes("gateway.ai.cloudflare.com") ||
+    baseUpstream.includes("api.cloudflare.com");
   const isLocal = provider === "local" || baseUpstream.includes("localhost") || baseUpstream.includes("127.0.0.1");
   const isOpencode = !isGoogle && !isCloudflare && !isLocal && (provider === "opencode" || baseUpstream.includes("opencode.ai"));
 

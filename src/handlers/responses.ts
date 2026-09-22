@@ -5,7 +5,8 @@ import {
 } from "../assistant-message";
 import { getUpstream, resolveModel, selectUpstream } from "../config";
 import { getModel } from "../env";
-import { fetchWithTimeout, jsonResponse, openaiAuthHeaders, SSE_HEADERS, upstreamErrorResponse, wrapProxyRequest } from "../http";
+import { fetchWithTimeout, jsonResponse, openaiAuthHeaders, passthroughResponse, SSE_HEADERS, upstreamErrorResponse, wrapProxyRequest } from "../http";
+import { isResponsesApiModel, injectDecoyToolsIfNeeded } from "../opencode-models";
 import { debugLog, warnLog } from "../logger";
 import { responseCache } from "../responses-cache";
 import type { OpenAIMessage, OpenAIResponse, ResponsesApiRequest, ResponsesApiUsage } from "../types";
@@ -15,6 +16,7 @@ import {
   extractUsage,
   responsesToChatMessages,
 } from "../translate/request/responses-to-chat";
+import { buildResponsesRequest } from "../translate/request/chat-to-responses";
 import {
   streamChatToResponses,
   type StreamCompleteEvent,
@@ -127,17 +129,60 @@ export async function handleResponsesRequest(
       );
     }
 
-    const { messages } = responsesToChatMessages(
-      req,
-      resolvedModel,
-      cachedPrevious?.fullMessages as OpenAIMessage[] | undefined,
-    );
-
     const acceptHeader = request.headers.get("Accept") || "";
     const shouldStream =
       req.stream !== undefined
         ? req.stream
         : acceptHeader.includes("text/event-stream");
+
+    if (upstream.includes("opencode.ai") && isResponsesApiModel(resolvedModel)) {
+      const nativeBody: Record<string, unknown> = {
+        model: resolvedModel,
+        stream: shouldStream,
+      };
+      if (cachedPrevious?.fullMessages) {
+        const { messages: prevMessages } = responsesToChatMessages(
+          { ...req, previous_response_id: undefined },
+          resolvedModel,
+          cachedPrevious.fullMessages as OpenAIMessage[],
+        );
+        const rebuilt = buildResponsesRequest(resolvedModel, prevMessages, {
+          tools: undefined,
+          stream: shouldStream,
+        });
+        nativeBody.input = rebuilt.input;
+        if (rebuilt.instructions) nativeBody.instructions = rebuilt.instructions;
+      } else {
+        if (req.instructions) nativeBody.instructions = req.instructions;
+        if (req.input) nativeBody.input = req.input;
+        if (req.previous_response_id) nativeBody.previous_response_id = req.previous_response_id;
+      }
+      if (req.tools) nativeBody.tools = req.tools;
+      const rawTokens = req.max_output_tokens ?? req.max_tokens;
+      if (rawTokens !== undefined) {
+        nativeBody.max_output_tokens = Math.max(16, rawTokens);
+      }
+      delete nativeBody.max_tokens;
+      if (req.temperature !== undefined) nativeBody.temperature = req.temperature;
+      if (req.top_p !== undefined) nativeBody.top_p = req.top_p;
+      injectDecoyToolsIfNeeded(nativeBody, resolvedModel, true);
+      debugLog(
+        `[${reqId}] POST /v1/responses → ${upstream}/responses native (model=${resolvedModel})`,
+      );
+      const res = await fetchWithTimeout(`${upstream}/responses`, {
+        method: "POST",
+        headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
+        body: JSON.stringify(nativeBody),
+      });
+      if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
+      return passthroughResponse(res);
+    }
+
+    const { messages } = responsesToChatMessages(
+      req,
+      resolvedModel,
+      cachedPrevious?.fullMessages as OpenAIMessage[] | undefined,
+    );
 
     const chatReq = buildChatRequest(req, req.model, messages);
     chatReq.stream = shouldStream;
@@ -149,9 +194,10 @@ export async function handleResponsesRequest(
 
     logResponsesTranslation(reqId, req, chatReq);
 
+    if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(chatReq, resolvedModel);
     const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
       method: "POST",
-      headers: { ...openaiAuthHeaders(key), "X-Request-Id": reqId },
+      headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
       body: JSON.stringify(chatReq),
     });
     if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);

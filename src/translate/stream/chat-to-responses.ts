@@ -476,7 +476,6 @@ export function streamChatToResponses(
               if (Array.isArray(choices) && choices.length > 0) {
                 const delta = choices[0].delta;
                 if (delta) {
-                  // Stream reasoning content if present
                   const reasoning = delta.reasoning_content || delta.reasoning;
                   if (reasoning) {
                     hasStreamedReasoning = true;
@@ -492,7 +491,6 @@ export function streamChatToResponses(
                     });
                   }
 
-                  // Stream standard text content if present
                   if (delta.content) {
                     if (hasStreamedReasoning) {
                       enqueueSSE(controller, "response.reasoning_text.done", {
@@ -507,7 +505,6 @@ export function streamChatToResponses(
                     processTextDelta(delta.content, controller);
                   }
 
-                  // Stream tool calls if present
                   const toolCalls = delta.tool_calls;
                   if (Array.isArray(toolCalls)) {
                     closeTextItem(controller);

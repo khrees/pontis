@@ -137,7 +137,6 @@ export function formatOpenAIToAnthropic(body: OpenAIRequest): AnthropicRequest {
     }
   }
 
-  // Build Anthropic request
   const anthropicRequest: AnthropicRequest = {
     model,
     messages: anthropicMessages,

@@ -9,8 +9,15 @@ import {
 } from "./ui";
 import { selectProviderInteractive, selectClientInteractive } from "./ui";
 import { setupLocalInteractive, detectRunningLocalEngine, fetchLocalModels } from "./provider-local";
-import { setupOpenCodeInteractive, getOpenCodeApiKeyInteractive, fetchWorkingOpenCodeModels } from "./provider-opencode";
-import { setupCloudflareInteractive, getCloudflareConfigInteractive, fetchCloudflareModels } from "./provider-cloudflare";
+import { setupOpenCodeInteractive, getOpenCodeApiKeyInteractive, fetchOpenCodeModelsGrouped } from "./provider-opencode";
+
+import {
+  setupCloudflareInteractive,
+  getCloudflareConfigInteractive,
+  fetchCloudflareModels,
+  sortCloudflareModels,
+  KNOWN_CLOUDFLARE_MODELS,
+} from "./provider-cloudflare";
 import { setupGoogleInteractive, getGoogleApiKeyInteractive, fetchGoogleModels } from "./provider-google";
 import { startProxy, killActiveProxy } from "./proxy-manager";
 import {
@@ -26,6 +33,7 @@ import {
 } from "./client-launcher";
 import {
   getCloudflareConfigSaved,
+  getCloudflareUpstreamUrl,
   getLocalApiKey,
   getOpenCodeApiKey,
   getGoogleAuthToken,
@@ -48,7 +56,6 @@ import {
   type ProviderType,
 } from "./preferences";
 
-/** Levenshtein distance for "did you mean" suggestions. */
 function editDistance(a: string, b: string): number {
   const m = a.length, n = b.length;
   const dp: number[] = Array.from({ length: n + 1 }, (_, j) => j);
@@ -66,7 +73,6 @@ function editDistance(a: string, b: string): number {
 
 const VALID_PROVIDERS: ProviderType[] = ["google", "opencode", "local", "cloudflare"];
 
-/** Suggest the closest valid provider for a mistyped value, or null. */
 function closestProvider(value: string): ProviderType | null {
   const lower = value.toLowerCase().trim();
   let best: ProviderType | null = null;
@@ -78,7 +84,6 @@ function closestProvider(value: string): ProviderType | null {
       best = p;
     }
   }
-  // Only suggest when it's plausibly a typo (within 2 edits or a prefix).
   return bestDist <= 2 || (best !== null && best.startsWith(lower.slice(0, 3))) ? best : null;
 }
 
@@ -119,9 +124,6 @@ export async function runInteractiveWizard(env: PontisEnv) {
 
   const detectedLocal = await detectRunningLocalEngine();
 
-  // Validate an explicitly-provided provider (--provider / PONTIS_PROVIDER): an
-  // unknown value must not silently fall through to the OpenCode default and
-  // overwrite the saved provider.
   let provider: ProviderType;
   if (env.provider) {
     const normalized = normalizeProvider(env.provider);
@@ -139,7 +141,6 @@ export async function runInteractiveWizard(env: PontisEnv) {
     );
   }
 
-  // Step 2: API key + Model setup
   let model: string;
   let apiKey: string;
   let upstreamUrl: string | undefined;
@@ -178,11 +179,9 @@ export async function runInteractiveWizard(env: PontisEnv) {
     }
   }
 
-  // Step 3: Pick client
   const defaultClientChoice = prefs.defaultClient || lastUsed?.client || "claude";
   const clientCmd = (env.clientCmd || (await selectClientInteractive(clientStatus, defaultClientChoice))) as ClientName | "server";
 
-  // Step 4: Ensure client is ready / installed
   if (clientCmd !== "server") {
     const ready = await ensureClientReady(clientCmd, true);
     if (!ready) {
@@ -191,7 +190,6 @@ export async function runInteractiveWizard(env: PontisEnv) {
     }
   }
 
-  // Save choices to preferences
   savePreferences({
     defaultProvider: provider,
     defaultModel: model,
@@ -208,31 +206,25 @@ export async function runInteractiveWizard(env: PontisEnv) {
     delete process.env.PONTIS_UPSTREAM_URL;
   }
 
-  // Step 5: Start proxy & launch
   await launchProxyAndClient(clientCmd, model, apiKey, provider, upstreamUrl, []);
 }
 
-/**
- * Direct launch with explicit config or environment defaults.
- */
 export async function runWithConfig(
   clientCmd: string,
   opts: Record<string, any>,
   extraArgs: string[],
-  skipSplash = false,
+  _skipSplash = false,
 ) {
   const prefs = getPreferences();
   const openCodeKey = getOpenCodeApiKey();
   const savedCf = getCloudflareConfigSaved();
 
-  // 1 & 2. Resolve provider and model consistently
   const { provider, model } = resolveActiveProviderAndModel({
     provider: opts.provider,
     model: opts.model,
     upstream: opts.upstream,
   });
 
-  // 3. Resolve upstream URL
   let upstreamUrl =
     opts.upstream ||
     process.env.PONTIS_UPSTREAM_URL ||
@@ -240,15 +232,14 @@ export async function runWithConfig(
 
   if (!upstreamUrl && provider === "cloudflare") {
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || savedCf.accountId;
-    const gatewayId = process.env.CLOUDFLARE_GATEWAY_ID || savedCf.gatewayId || "default";
+    const gatewayId = process.env.CLOUDFLARE_GATEWAY_ID || savedCf.gatewayId;
     if (accountId) {
-      upstreamUrl = `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/workers-ai/v1`;
+      upstreamUrl = getCloudflareUpstreamUrl(accountId, gatewayId);
     }
   }
 
   const upstreamFormat = opts.format || process.env.PONTIS_UPSTREAM_FORMAT || "openai";
 
-  // 4. Resolve API key
   let apiKey = opts.apiKey;
   if (!apiKey) {
     switch (provider) {
@@ -271,7 +262,7 @@ export async function runWithConfig(
         if (!apiKey || !savedCf.accountId) {
           const cf = await getCloudflareConfigInteractive();
           apiKey = cf.apiToken;
-          upstreamUrl = `https://gateway.ai.cloudflare.com/v1/${cf.accountId}/${cf.gatewayId}/workers-ai/v1`;
+          upstreamUrl = getCloudflareUpstreamUrl(cf.accountId, cf.gatewayId);
         }
         break;
       }
@@ -289,7 +280,6 @@ export async function runWithConfig(
   if (!apiKey) error("API key required.");
   if (!model) error("Model required.");
 
-  // Save session to lastUsed
   updateLastUsed(clientCmd as ClientName | "server", provider, model);
 
   const MODE_LABELS: Record<string, string> = {
@@ -301,7 +291,6 @@ export async function runWithConfig(
     hermes: "Hermes Agent",
   };
 
-  // Ensure client is installed before launching
   if (clientCmd !== "server") {
     const autoInstall = opts.install !== false && process.env.PONTIS_AUTO_INSTALL !== "false";
     const ready = await ensureClientReady(clientCmd as ClientName, autoInstall);
@@ -322,9 +311,6 @@ export async function runWithConfig(
   await launchProxyAndClient(clientCmd, model, apiKey, provider, upstreamUrl, extraArgs);
 }
 
-/**
- * Internal helper to configure proxy, environment, and launch client.
- */
 async function launchProxyAndClient(
   clientCmd: string,
   model: string,
@@ -349,9 +335,9 @@ async function launchProxyAndClient(
   kv("Model", t.primary(model));
   if (upstreamUrl) kv("Upstream", t.muted(upstreamUrl));
 
-  // Set environment for proxy and client processes
   process.env.PONTIS_PROVIDER = provider;
   process.env.PONTIS_MODEL = model;
+  process.env.PONTIS_CLIENT = clientCmd;
   if (upstreamUrl) {
     process.env.PONTIS_UPSTREAM_URL = upstreamUrl;
   } else {
@@ -359,9 +345,6 @@ async function launchProxyAndClient(
   }
 
   try {
-    // Make the API key available to the proxy process via environment, so the
-    // Responses handler can substitute it for any "sk-*" key Codex sends when
-    // the user switches to a native OpenAI model mid-session.
     process.env.PONTIS_API_KEY = apiKey;
     if (clientCmd === "codex" || clientCmd === "server") {
       process.env.OPENAI_API_KEY = apiKey;
@@ -369,7 +352,6 @@ async function launchProxyAndClient(
     const proxyInfo = await startProxy(model, false);
     let proxyUrl = proxyInfo.proxyUrl;
 
-    // Client-specific provider wiring
     switch (clientCmd) {
       case "pi":
         setupPiProvider(apiKey, model, proxyUrl);
@@ -385,7 +367,6 @@ async function launchProxyAndClient(
         break;
     }
 
-    // Fast connectivity verification
     let ok = await testConnectivity(apiKey, model, provider, proxyUrl);
     while (!ok && process.stdin.isTTY) {
       const recovered = await promptRecovery(provider, apiKey, model, upstreamUrl);
@@ -400,7 +381,6 @@ async function launchProxyAndClient(
       apiKey = recovered.apiKey;
       upstreamUrl = recovered.upstreamUrl;
 
-      // Update runtime environment
       process.env.PONTIS_PROVIDER = provider;
       process.env.PONTIS_MODEL = model;
       if (upstreamUrl) {
@@ -409,7 +389,6 @@ async function launchProxyAndClient(
         delete process.env.PONTIS_UPSTREAM_URL;
       }
 
-      // Persist preferences
       savePreferences({
         defaultProvider: provider,
         defaultModel: model,
@@ -417,11 +396,9 @@ async function launchProxyAndClient(
       });
       updateLastUsed(clientCmd as ClientName | "server", provider, model);
 
-      // Restart proxy with the new model & configuration
       const updatedProxy = await startProxy(model, false);
       proxyUrl = updatedProxy.proxyUrl;
 
-      // Client-specific provider re-wiring
       switch (clientCmd) {
         case "pi":
           setupPiProvider(apiKey, model, proxyUrl);
@@ -443,7 +420,6 @@ async function launchProxyAndClient(
       process.exit(1);
     }
 
-    // Launch client process
     await launchClient(clientCmd, model, apiKey, extraArgs, proxyUrl);
   } finally {
     switch (clientCmd) {
@@ -471,10 +447,6 @@ export interface RecoveryResult {
   proceedAnyway?: boolean;
 }
 
-/**
- * Interactive connection recovery when a configured model or provider fails.
- * Allows picking working models or switching providers entirely.
- */
 async function promptRecovery(
   provider: ProviderType,
   apiKey: string,
@@ -485,6 +457,7 @@ async function promptRecovery(
   console.log(`  ${t.muted("How would you like to resolve this connection issue?")}`);
 
   let availableModels: string[] = [];
+  let opencodeRawMap = new Map<string, string>();
   if (provider === "google") {
     const spin = createSpinner("Fetching live available models from Google AI...");
     try {
@@ -498,13 +471,27 @@ async function promptRecovery(
   } else if (provider === "opencode") {
     const spin = createSpinner("Fetching live available models from OpenCode...");
     try {
-      availableModels = await fetchWorkingOpenCodeModels(apiKey, true);
-    } catch {}
-    spin.stop(
-      availableModels.length > 0
-        ? { type: "success", text: `${availableModels.length} models available` }
-        : { type: "warning", text: "No models returned from OpenCode API" },
-    );
+      const groups = await fetchOpenCodeModelsGrouped(apiKey, true);
+      const total = groups.combined.length;
+      opencodeRawMap = new Map([
+        ...groups.free.map((m) => [`Free · ${m}`, m] as [string, string]),
+        ...groups.frontier.map((m) => [`Frontier · ${m}`, m] as [string, string]),
+        ...groups.chinese.map((m) => [`Chinese · ${m}`, m] as [string, string]),
+        ...groups.others.map((m) => [`Others · ${m}`, m] as [string, string]),
+      ]);
+      availableModels = [...opencodeRawMap.keys()];
+      spin.stop(
+        availableModels.length > 0
+          ? {
+              type: "success",
+              text: `${total} OpenCode models available (Inference API)`,
+            }
+          : { type: "warning", text: "No working models found from OpenCode API" },
+      );
+    } catch {
+      spin.stop({ type: "warning", text: "No models returned from OpenCode API" });
+    }
+
   } else if (provider === "cloudflare") {
     const savedCf = getCloudflareConfigSaved();
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || savedCf.accountId;
@@ -521,7 +508,7 @@ async function promptRecovery(
           : { type: "warning", text: "No models returned from Cloudflare" },
       );
     }
-    availableModels = liveCf;
+    availableModels = liveCf.length > 0 ? sortCloudflareModels(liveCf) : [...KNOWN_CLOUDFLARE_MODELS];
   } else {
     const prefs = getPreferences();
     const endpoint = upstreamUrl || prefs.localEndpoint || "http://localhost:11434/v1";
@@ -529,15 +516,28 @@ async function promptRecovery(
     try {
       availableModels = await fetchLocalModels(endpoint, apiKey);
     } catch {}
-    spin.stop(
-      availableModels.length > 0
-        ? { type: "success", text: `${availableModels.length} local models found` }
-        : { type: "warning", text: "No models returned from local engine" },
-    );
+
+    const cloudPullModels = availableModels.filter((m) => m.endsWith(":cloud") || m.includes(":cloud-"));
+    const trueLocalModels = availableModels.filter((m) => !m.endsWith(":cloud") && !m.includes(":cloud-"));
+
+    if (cloudPullModels.length > 0 && trueLocalModels.length < availableModels.length) {
+      spin.stop({ type: "success", text: `${trueLocalModels.length} local models found (${cloudPullModels.length} cloud-pull models hidden — require internet)` });
+    } else {
+      spin.stop(
+        availableModels.length > 0
+          ? { type: "success", text: `${availableModels.length} local models found` }
+          : { type: "warning", text: "No models returned from local engine" },
+      );
+    }
+
+    availableModels = [...trueLocalModels, ...cloudPullModels];
   }
 
-  // Filter out the failed model from suggestions
-  availableModels = availableModels.filter((m) => m !== failedModel);
+  if (opencodeRawMap.size > 0) {
+    availableModels = availableModels.filter((label) => opencodeRawMap.get(label) !== failedModel);
+  } else {
+    availableModels = availableModels.filter((m) => m !== failedModel);
+  }
 
   const choices = [
     ...availableModels,
@@ -551,19 +551,16 @@ async function promptRecovery(
     defaultIndex: 0,
   });
 
-  // Custom manual model entry
   if (choice.index === -1) {
     const customModel = choice.value.trim();
     if (!customModel) return null;
     return { provider, model: customModel, apiKey, upstreamUrl };
   }
 
-  // Cancel / Exit
   if (choice.index === choices.length - 1) {
     return null;
   }
 
-  // Switch Provider option
   if (choice.index === choices.length - 2) {
     const detectedLocal = await detectRunningLocalEngine();
     const newProvider = await selectProviderInteractive(detectedLocal ? `${detectedLocal.name}` : null);
@@ -614,7 +611,6 @@ async function promptRecovery(
     };
   }
 
-  // Proceed anyway option
   if (choice.index === choices.length - 3) {
     return {
       provider,
@@ -625,10 +621,10 @@ async function promptRecovery(
     };
   }
 
-  // Selected a model from the list
+  const pickedRaw = opencodeRawMap.get(choice.value) ?? choice.value.replace(/^(Zen|Go) · /, "");
   return {
     provider,
-    model: choice.value,
+    model: pickedRaw,
     apiKey,
     upstreamUrl,
   };
