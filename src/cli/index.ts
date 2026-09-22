@@ -33,7 +33,12 @@ import {
 } from "./ui";
 import { fetchOpenCodeModelsGrouped } from "./provider-opencode";
 import { isFreeOpenCodeModel } from "../opencode-models";
-import { fetchLocalModels } from "./provider-local";
+import {
+  fetchLocalModels,
+  fetchOllamaRegistryModels,
+  categorizeLocalModels,
+  KNOWN_OLLAMA_MODELS,
+} from "./provider-local";
 import {
   fetchCloudflareModels,
   KNOWN_CLOUDFLARE_MODELS,
@@ -617,28 +622,60 @@ program
           const spin = jsonMode
             ? null
             : createSpinner(`Scanning models at ${upstreamUrl}...`);
-          const models = await fetchLocalModels(upstreamUrl, apiKey);
+          const rawModels = await fetchLocalModels(upstreamUrl, apiKey);
+          const models = rawModels.length > 0 ? rawModels : (await fetchOllamaRegistryModels());
+          const effectiveModels = models.length > 0 ? models : [...KNOWN_OLLAMA_MODELS];
+          const groups = categorizeLocalModels(effectiveModels);
+
           if (spin)
             spin.stop(
-              models.length > 0
+              rawModels.length > 0
                 ? {
                     type: "success",
-                    text: `Found ${models.length} model${models.length === 1 ? "" : "s"}`,
+                    text: `Found ${rawModels.length} local model${rawModels.length === 1 ? "" : "s"}`,
                   }
-                : { type: "warning", text: "No models returned from upstream" },
+                : models.length > 0
+                  ? {
+                      type: "success",
+                      text: `No local models installed — fetched ${models.length} from Ollama registry`,
+                    }
+                  : { type: "warning", text: "No models returned from upstream — showing known Ollama catalog" },
             );
           if (jsonMode) {
             outputJson({
               provider: "local",
               upstream: upstreamUrl,
-              models: models.map((id) => ({ id })),
+              groups: {
+                free: groups.free.map((id) => ({ id })),
+                frontier: groups.frontier.map((id) => ({ id })),
+                chinese: groups.chinese.map((id) => ({ id })),
+                others: groups.others.map((id) => ({ id })),
+              },
+              models: groups.all.map((id) => ({ id })),
             });
           }
-          if (models.length === 0) {
-            badge("warning", "No models returned from upstream. Is your local engine running?");
-          } else {
-            section("Available Local Models");
-            for (const m of models) kv("Model", t.primary(m));
+          if (rawModels.length === 0 && models.length === 0) {
+            badge("warning", "No models returned from upstream. Is your local engine running? Showing known catalog.");
+          }
+
+          if (groups.free.length > 0) {
+            section(`Free Models (${groups.free.length}) · Locally stored & run (0 token cost)`);
+            for (const m of groups.free) kv("Free", t.success(m));
+          }
+
+          if (groups.frontier.length > 0) {
+            section(`Frontier Models (${groups.frontier.length}) · Flagship reasoning & coding`);
+            for (const m of groups.frontier) kv("Frontier", t.primary(m));
+          }
+
+          if (groups.chinese.length > 0) {
+            section(`Chinese Models (${groups.chinese.length}) · Qwen, DeepSeek, Kimi, MiniMax, GLM`);
+            for (const m of groups.chinese) kv("Chinese", t.accent(m));
+          }
+
+          if (groups.others.length > 0) {
+            section(`Others Models (${groups.others.length}) · Meta, Google, Mistral, Microsoft, NVIDIA`);
+            for (const m of groups.others) kv("Others", t.dim(m));
           }
           break;
         }
