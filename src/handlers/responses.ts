@@ -16,7 +16,8 @@ import {
   extractUsage,
   responsesToChatMessages,
 } from "../translate/request/responses-to-chat";
-import { buildResponsesRequest } from "../translate/request/chat-to-responses";
+import { buildResponsesRequest, streamResponsesToChatCompletion } from "../translate/request/chat-to-responses";
+import { aggregateChatStreamToJson } from "../translate/stream/openai-to-anthropic";
 import {
   streamChatToResponses,
   type StreamCompleteEvent,
@@ -24,6 +25,22 @@ import {
 
 function createResponseId(): string {
   return `resp_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+}
+
+async function aggregateStreamToResponseParts(
+  raw: ReadableStream<Uint8Array>,
+  resolvedModel: string,
+  upstreamIsResponses: boolean,
+): Promise<{ output: unknown; usage: ResponsesApiUsage }> {
+  const src = upstreamIsResponses
+    ? streamResponsesToChatCompletion(raw, resolvedModel)
+    : raw;
+  const chatRes = await aggregateChatStreamToJson(src, resolvedModel);
+  const message = chatRes.choices?.[0]?.message || { role: "assistant" as const };
+  return {
+    output: chatResponseToOutput(message),
+    usage: extractUsage(chatRes),
+  };
 }
 
 function cacheTurn(
@@ -146,7 +163,7 @@ export async function handleResponsesRequest(
     if (upstream.includes("opencode.ai") && isResponsesApiModel(resolvedModel)) {
       const nativeBody: Record<string, unknown> = {
         model: resolvedModel,
-        stream: shouldStream,
+        stream: shouldStream || isFree,
       };
       if (cachedPrevious?.fullMessages) {
         const { messages: prevMessages } = responsesToChatMessages(
@@ -183,6 +200,23 @@ export async function handleResponsesRequest(
         body: JSON.stringify(nativeBody),
       });
       if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
+      if (shouldStream) return passthroughResponse(res);
+      const contentType = res.headers.get("content-type") || "";
+      if (isFree && contentType.includes("text/event-stream")) {
+        const { output, usage } = await aggregateStreamToResponseParts(
+          (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+          resolvedModel,
+          true,
+        );
+        return jsonResponse({
+          id: createResponseId(),
+          object: "response",
+          model: originalModel,
+          status: "completed",
+          usage,
+          output,
+        });
+      }
       return passthroughResponse(res);
     }
 
@@ -193,8 +227,8 @@ export async function handleResponsesRequest(
     );
 
     const chatReq = buildChatRequest(req, req.model, messages);
-    chatReq.stream = shouldStream;
-    if (shouldStream) {
+    chatReq.stream = shouldStream || isFree;
+    if (chatReq.stream) {
       chatReq.stream_options = { include_usage: true };
     } else {
       delete chatReq.stream_options;
@@ -213,7 +247,7 @@ export async function handleResponsesRequest(
 
     const responseId = createResponseId();
 
-    if (chatReq.stream) {
+    if (chatReq.stream && shouldStream) {
       cacheTurn(responseId, resolvedModel, originalModel, chatReq.messages, {
         input_tokens: 0,
         output_tokens: 0,
@@ -245,7 +279,13 @@ export async function handleResponsesRequest(
       );
     }
 
-    const chatRes = (await res.json()) as OpenAIResponse;
+    const contentType = res.headers.get("content-type") || "";
+    const chatRes = (chatReq.stream && contentType.includes("text/event-stream")
+      ? await aggregateChatStreamToJson(
+          (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+          resolvedModel,
+        )
+      : ((await res.json()) as OpenAIResponse)) as OpenAIResponse;
     const message = chatRes.choices?.[0]?.message || { role: "assistant" as const };
     const { output } = chatResponseToOutput(message);
     const usage = extractUsage(chatRes);

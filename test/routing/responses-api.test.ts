@@ -270,4 +270,79 @@ describe('POST /v1/responses — Responses API (Codex CLI)', () => {
 
     vi.restoreAllMocks();
   });
+
+  it('forces upstream streaming and free-tier marker for free chat models in non-streaming responses requests', async () => {
+    let capturedBody: CapturedRequestBody | null = null;
+    let capturedUrl = '';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url, init?: RequestInit) => {
+        capturedUrl = typeof url === 'string' ? url : (url as any).href ?? (url as any).url;
+        capturedBody = parseCapturedBody(init?.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'big-pickle',
+        input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }]
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    expect(capturedUrl).toContain('/chat/completions');
+    expect(capturedBody!.stream).toBe(true);
+    expect(capturedBody!.apiKey).toBe('public');
+    const resJson = await parseResponsesJson(response);
+    expect(resJson.object).toBe('response');
+    vi.restoreAllMocks();
+  });
+
+  it('forces upstream streaming for native responses free models but does not send the apiKey body param', async () => {
+    let capturedBody: CapturedRequestBody | null = null;
+    let capturedHeaders: Record<string, string> = {};
+    let capturedUrl = '';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url, init?: RequestInit) => {
+        capturedUrl = typeof url === 'string' ? url : (url as any).href ?? (url as any).url;
+        capturedBody = parseCapturedBody(init?.body);
+        capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+        return new Response(JSON.stringify({
+          id: 'resp_x',
+          object: 'response',
+          status: 'completed',
+          output: [{ type: 'message', id: 'msg_x', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: 'ok', annotations: [] }] }],
+          usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'muse-spark-1.3-contributor-free',
+        input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }]
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    expect(capturedUrl).toContain('/responses');
+    expect(capturedBody!.stream).toBe(true);
+    expect(capturedBody!.apiKey).toBeUndefined();
+    expect(capturedHeaders['Authorization']).toBe('Bearer public');
+    const resJson = await parseResponsesJson(response);
+    expect(resJson.object).toBe('response');
+    vi.restoreAllMocks();
+  });
 });

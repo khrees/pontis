@@ -15,8 +15,26 @@ export const OPENCODE_CLIENT_VERSION = "1.18.31";
 
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
+/**
+ * Fill a buffer with pseudo-random bytes.
+ * Prefers the WebCrypto global, which is absent in some runtimes (e.g. the
+ * pkg-embedded Node used by release binaries) where bare `crypto` throws
+ * "crypto is not defined". Falls back to Math.random — safe here because the
+ * generated session/message IDs are cosmetic, not secret.
+ */
+function getRandomBytes(bytes: Uint8Array): Uint8Array {
+  const g = (globalThis as any)?.crypto;
+  if (g && typeof g.getRandomValues === "function") {
+    return g.getRandomValues(bytes);
+  }
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return bytes;
+}
+
 function randomBase62(length: number): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  const bytes = getRandomBytes(new Uint8Array(length));
   let result = "";
   for (let i = 0; i < length; i++) {
     result += BASE62_CHARS[bytes[i] % 62];

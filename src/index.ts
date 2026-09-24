@@ -348,9 +348,10 @@ async function handleV1Completions(
 
     if (fmt === "openai") {
       const chatReq = formatOpenAICompletionToOpenAIChat(req);
+      const isFree = upstream.includes("opencode.ai") && isFreeOpenCodeModel(resolvedModel);
       if (upstream.includes("opencode.ai") && isResponsesApiModel(resolvedModel)) {
         const respReq = buildResponsesRequest(resolvedModel, chatReq.messages, {
-          stream: chatReq.stream === true,
+          stream: chatReq.stream === true || isFree,
           max_tokens: chatReq.max_tokens,
           temperature: chatReq.temperature,
           top_p: chatReq.top_p,
@@ -363,15 +364,29 @@ async function handleV1Completions(
         });
         if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
         if (respReq.stream) {
-          return new Response(
-            streamOpenAIChatToOpenAICompletion(
-              streamResponsesToChatCompletion(
-                (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+          if (chatReq.stream) {
+            return new Response(
+              streamOpenAIChatToOpenAICompletion(
+                streamResponsesToChatCompletion(
+                  (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+                  resolvedModel,
+                ),
+                req.model,
+              ),
+              { headers: SSE_HEADERS },
+            );
+          }
+          return jsonResponse(
+            formatOpenAIChatToOpenAICompletion(
+              await aggregateChatStreamToJson(
+                streamResponsesToChatCompletion(
+                  (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+                  resolvedModel,
+                ),
                 resolvedModel,
               ),
               req.model,
             ),
-            { headers: SSE_HEADERS },
           );
         }
         return jsonResponse(
@@ -381,12 +396,13 @@ async function handleV1Completions(
           ),
         );
       }
-      if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(chatReq, resolvedModel);
-      injectOpencodeFreeTierMarker(chatReq, upstream, resolvedModel);
+      const upstreamChatReq = { ...chatReq, stream: chatReq.stream === true || isFree };
+      if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(upstreamChatReq, resolvedModel);
+      injectOpencodeFreeTierMarker(upstreamChatReq, upstream, resolvedModel);
       const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
         method: "POST",
         headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
-        body: JSON.stringify(chatReq),
+        body: JSON.stringify(upstreamChatReq),
       });
       if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
 
@@ -397,6 +413,18 @@ async function handleV1Completions(
             req.model,
           ),
           { headers: SSE_HEADERS },
+        );
+      }
+      const contentType = res.headers.get("content-type") || "";
+      if (isFree && contentType.includes("text/event-stream")) {
+        return jsonResponse(
+          formatOpenAIChatToOpenAICompletion(
+            await aggregateChatStreamToJson(
+              (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+              resolvedModel,
+            ),
+            req.model,
+          ),
         );
       }
       return jsonResponse(

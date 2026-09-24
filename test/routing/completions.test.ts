@@ -44,4 +44,35 @@ describe('POST /v1/completions — legacy completions', () => {
     expect(capturedBody!.model).toBe('mimo-v2.5-free');
     vi.restoreAllMocks();
   });
+
+  it('forces upstream streaming and free-tier marker for free models even when the client does not stream', async () => {
+    let capturedBody: CapturedRequestBody | null = null;
+    let capturedUrl = '';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url, init?: RequestInit) => {
+        capturedUrl = typeof url === 'string' ? url : (url as any).href ?? (url as any).url;
+        capturedBody = parseCapturedBody(init?.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'big-pickle',
+        prompt: 'say hi',
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    expect(capturedUrl).toContain('/chat/completions');
+    expect(capturedBody!.stream).toBe(true);
+    expect(capturedBody!.apiKey).toBe('public');
+    vi.restoreAllMocks();
+  });
 });
