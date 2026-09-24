@@ -88,7 +88,7 @@ export interface CapturedRequestBody {
 }
 
 
-export function parseCapturedBody(body: BodyInit | null | undefined): CapturedRequestBody {
+export function parseCapturedBody(body: unknown): CapturedRequestBody {
   return JSON.parse(body as string) as CapturedRequestBody;
 }
 
