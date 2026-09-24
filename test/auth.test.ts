@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { extractApiKey, validateApiKey } from '../src/auth';
+import { InvalidApiKeyError, ApiKeyLengthError } from '../src/errors';
 
 describe('extractApiKey', () => {
   it('extracts from X-Api-Key header', () => {
@@ -8,6 +9,14 @@ describe('extractApiKey', () => {
 
   it('extracts from Authorization Bearer header', () => {
     expect(extractApiKey({ 'authorization': 'Bearer sk-test-key-32-chars-minimum-here' })).toBe('sk-test-key-32-chars-minimum-here');
+  });
+
+  it('extracts from lowercase bearer in Authorization header', () => {
+    expect(extractApiKey({ 'Authorization': 'bearer AIzaSyTestKey123456789' })).toBe('AIzaSyTestKey123456789');
+  });
+
+  it('extracts from x-goog-api-key header', () => {
+    expect(extractApiKey({ 'x-goog-api-key': 'AIzaSyGoogleKey12345' })).toBe('AIzaSyGoogleKey12345');
   });
 
   it('prefers X-Api-Key over Authorization', () => {
@@ -34,15 +43,10 @@ describe('validateApiKey', () => {
   });
 
   it('returns error for missing key', () => {
-    const err = validateApiKey(null);
-    expect(err).not.toBeNull();
-    expect(err!.status).toBe(401);
-    expect(err!.body).toHaveProperty('error');
+    expect(() => validateApiKey(null)).toThrow(InvalidApiKeyError);
   });
 
   it('returns error for short key (< 32 chars)', () => {
-    const err = validateApiKey('short-key');
-    expect(err).not.toBeNull();
-    expect(err!.status).toBe(401);
+    expect(() => validateApiKey('short-key')).toThrow(ApiKeyLengthError);
   });
 });

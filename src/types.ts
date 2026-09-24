@@ -223,12 +223,6 @@ export interface OpenAICompletionResponse {
 
 // --- OpenAI Responses API (Codex CLI) ---
 
-export interface ResponsesFunctionOutputPayload {
-  content: string;
-  success?: boolean;
-  content_items?: ResponseTextPart[];
-}
-
 export interface ResponseTextPart {
   type: "input_text" | "text" | "output_text";
   text?: string;
@@ -289,6 +283,7 @@ export interface ResponsesApiRequest {
   tools?: ResponsesApiTool[];
   stream?: boolean;
   max_tokens?: number;
+  max_output_tokens?: number;
   temperature?: number;
   top_p?: number;
   previous_response_id?: string;

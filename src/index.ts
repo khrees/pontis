@@ -1,3 +1,4 @@
+import pkg from "../package.json";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { extractApiKey, authErrorResponse } from "./auth";
@@ -24,9 +25,20 @@ import {
 } from "./http";
 import { formatAnthropicToOpenAI } from "./translate/request/anthropic-to-openai";
 import { formatOpenAIToAnthropic } from "./translate/request/openai-to-anthropic";
+import {
+  buildResponsesRequest,
+  responsesJsonToChat,
+  streamResponsesToChatCompletion,
+} from "./translate/request/chat-to-responses";
+import {
+  isResponsesApiModel,
+  injectDecoyToolsIfNeeded,
+  injectOpencodeFreeTierMarker,
+  isFreeOpenCodeModel,
+} from "./opencode-models";
 import { formatOpenAIToAnthropic as toAnthropicResponse } from "./translate/response/openai-to-anthropic";
 import { formatAnthropicToOpenAI as toOpenAIResponse } from "./translate/response/anthropic-to-openai";
-import { streamOpenAIToAnthropic } from "./translate/stream/openai-to-anthropic";
+import { streamOpenAIToAnthropic, aggregateChatStreamToJson } from "./translate/stream/openai-to-anthropic";
 import { streamAnthropicToOpenAI } from "./translate/stream/anthropic-to-openai";
 import {
   formatOpenAICompletionToOpenAIChat,
@@ -39,6 +51,7 @@ import {
   streamAnthropicToOpenAICompletion,
   streamOpenAICompletionToAnthropic,
 } from "./translate/completions";
+import { getDocsHtml } from "./docs";
 import type {
   AnthropicRequest,
   AnthropicResponse,
@@ -48,247 +61,437 @@ import type {
   OpenAIResponse,
 } from "./types";
 
-async function handleRequest(request: Request): Promise<Response> {
-  const reqId = generateRequestId();
-  const route = routeConfig(request);
-  const fmt = upstreamFormat();
-  const reqUrlPath = new URL(request.url).pathname;
-  const key = extractApiKey(request.headers);
+async function handleV1Messages(
+  reqId: string,
+  request: Request,
+  route: ReturnType<typeof routeConfig>,
+  fmt: ReturnType<typeof upstreamFormat>,
+  key: string | null,
+): Promise<Response> {
+  return wrapProxyRequest(reqId, async () => {
+    const req = (await request.json()) as AnthropicRequest;
+    const originalModel = req.model;
+    if (route.modelOverride) req.model = route.modelOverride;
 
-  if (route.path === "/v1/messages" && request.method === "POST") {
-    return wrapProxyRequest(reqId, async () => {
-      const req = (await request.json()) as AnthropicRequest;
-      const originalModel = req.model;
-      if (route.modelOverride) req.model = route.modelOverride;
+    debugLog(`[${reqId}] Received Anthropic messages count: ${req.messages?.length}`);
 
-      debugLog(`[${reqId}] Received Anthropic messages count: ${req.messages?.length}`);
+    const { model: resolvedModel, upstream, authErr } = resolveModelAndUpstream(
+      request,
+      route.upstream,
+      req.model,
+      { hasVision: requestHasImages(req.messages) },
+    );
+    if (authErr) return authErrorResponse(authErr);
+    req.model = resolvedModel;
+    debugLog(`[${reqId}] POST /v1/messages → ${upstream} (model=${resolvedModel})`);
 
-      const { model: resolvedModel, upstream, authErr } = resolveModelAndUpstream(
-        request,
-        route.upstream,
-        req.model,
-        { hasVision: requestHasImages(req.messages) },
-      );
-      if (authErr) return authErrorResponse(authErr);
-      req.model = resolvedModel;
-      debugLog(`[${reqId}] POST /v1/messages → ${upstream} (model=${resolvedModel})`);
+    if (fmt === "openai") {
+      const openaiReq = formatAnthropicToOpenAI(req);
+      debugLog(`[${reqId}] Translated OpenAI messages: ${JSON.stringify(openaiReq.messages.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content.slice(0, 100) + "..." : m.content })))}`);
 
-      if (fmt === "openai") {
-        const openaiReq = formatAnthropicToOpenAI(req);
-        debugLog(`[${reqId}] Translated OpenAI messages: ${JSON.stringify(openaiReq.messages.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content.slice(0, 100) + "..." : m.content })))}`);
-
-        const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
-          method: "POST",
-          headers: { ...openaiAuthHeaders(key), "X-Request-Id": reqId },
-          body: JSON.stringify(openaiReq),
+      if (upstream.includes("opencode.ai") && isResponsesApiModel(resolvedModel)) {
+        const isFree = isFreeOpenCodeModel(resolvedModel);
+        const shouldStreamUpstream = openaiReq.stream === true || isFree;
+        const respReq = buildResponsesRequest(resolvedModel, openaiReq.messages, {
+          tools: openaiReq.tools,
+          stream: shouldStreamUpstream,
+          max_tokens: openaiReq.max_tokens,
+          temperature: openaiReq.temperature,
+          top_p: openaiReq.top_p,
         });
-        debugLog(`[${reqId}] Upstream fetch headers received (status=${res.status})`);
-
+        injectDecoyToolsIfNeeded(respReq, resolvedModel, true);
+        debugLog(`[${reqId}] POST /v1/messages → ${upstream}/responses (model=${resolvedModel})`);
+        const res = await fetchWithTimeout(`${upstream}/responses`, {
+          method: "POST",
+          headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
+          body: JSON.stringify(respReq),
+        });
         if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
-
         if (openaiReq.stream) {
-          debugLog(`[${reqId}] Returning stream Response`);
           return new Response(
             streamOpenAIToAnthropic(
-              (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+              streamResponsesToChatCompletion(
+                (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+                resolvedModel,
+              ),
               originalModel,
             ),
             { headers: SSE_HEADERS },
           );
         }
-        const jsonVal = await res.json();
+        const contentType = res.headers.get("content-type") || "";
+        if (isFree && contentType.includes("text/event-stream")) {
+          const chatJson = await aggregateChatStreamToJson(
+            streamResponsesToChatCompletion(
+              (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+              resolvedModel,
+            ),
+            resolvedModel,
+          );
+          return jsonResponse(toAnthropicResponse(chatJson, originalModel));
+        }
         return jsonResponse(
-          toAnthropicResponse(jsonVal as OpenAIResponse, originalModel),
+          toAnthropicResponse(responsesJsonToChat(await res.json(), resolvedModel), originalModel),
         );
       }
 
-      if (fmt === "openai-completions") {
-        const completionReq = formatAnthropicToOpenAICompletion(req);
-        const res = await fetchWithTimeout(`${upstream}/completions`, {
-          method: "POST",
-          headers: { ...openaiAuthHeaders(key), "X-Request-Id": reqId },
-          body: JSON.stringify(completionReq),
-        });
-        if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
+      const isFree = upstream.includes("opencode.ai") && isFreeOpenCodeModel(resolvedModel);
+      const shouldStreamUpstream = openaiReq.stream === true || isFree;
+      const upstreamReq = { ...openaiReq, stream: shouldStreamUpstream };
+      if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(upstreamReq, resolvedModel);
+      injectOpencodeFreeTierMarker(upstreamReq, upstream, resolvedModel);
+      const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
+        method: "POST",
+        headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
+        body: JSON.stringify(upstreamReq),
+      });
+      debugLog(`[${reqId}] Upstream fetch headers received (status=${res.status})`);
 
-        if (completionReq.stream) {
-          return new Response(
-            streamOpenAICompletionToAnthropic(
-              (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
-              originalModel,
-            ),
-            { headers: SSE_HEADERS },
-          );
-        }
-        return jsonResponse(
-          toAnthropicResponseFromCompletion(
-            (await res.json()) as OpenAICompletionResponse,
+      if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
+
+      if (openaiReq.stream) {
+        debugLog(`[${reqId}] Returning stream Response`);
+        return new Response(
+          streamOpenAIToAnthropic(
+            (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
             originalModel,
           ),
+          { headers: SSE_HEADERS },
         );
       }
+      const contentType = res.headers.get("content-type") || "";
+      if (isFree && contentType.includes("text/event-stream")) {
+        const chatJson = await aggregateChatStreamToJson(
+          (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+          resolvedModel,
+        );
+        return jsonResponse(toAnthropicResponse(chatJson, originalModel));
+      }
+      const jsonVal = await res.json();
+      return jsonResponse(
+        toAnthropicResponse(jsonVal as OpenAIResponse, originalModel),
+      );
+    }
 
+    if (fmt === "openai-completions") {
+      const completionReq = formatAnthropicToOpenAICompletion(req);
+      const res = await fetchWithTimeout(`${upstream}/completions`, {
+        method: "POST",
+        headers: { ...openaiAuthHeaders(key, upstream, request), "X-Request-Id": reqId },
+        body: JSON.stringify(completionReq),
+      });
+      if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
+
+      if (completionReq.stream) {
+        return new Response(
+          streamOpenAICompletionToAnthropic(
+            (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+            originalModel,
+          ),
+          { headers: SSE_HEADERS },
+        );
+      }
+      return jsonResponse(
+        toAnthropicResponseFromCompletion(
+          (await res.json()) as OpenAICompletionResponse,
+          originalModel,
+        ),
+      );
+    }
+
+    // Anthropic passthrough
+    const res = await fetchWithTimeout(`${upstream}/v1/messages`, {
+      method: "POST",
+      headers: { ...anthropicHeaders(request, key!), "X-Request-Id": reqId },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
+    return passthroughResponse(res);
+  });
+}
+
+/** POST /v1/chat/completions — OpenAI Chat → Anthropic / passthrough */
+async function handleChatCompletions(
+  reqId: string,
+  request: Request,
+  route: ReturnType<typeof routeConfig>,
+  fmt: ReturnType<typeof upstreamFormat>,
+  key: string | null,
+): Promise<Response> {
+  return wrapProxyRequest(reqId, async () => {
+    const req = (await request.json()) as OpenAIRequest;
+    const { model: resolvedModel, upstream, authErr } = resolveModelAndUpstream(
+      request,
+      route.upstream,
+      req.model || "gpt-5.4-mini",
+    );
+    if (authErr) return authErrorResponse(authErr);
+    req.model = resolvedModel;
+    debugLog(`[${reqId}] POST /v1/chat/completions → ${upstream} (model=${resolvedModel})`);
+
+    if (fmt === "anthropic") {
+      const anthReq = formatOpenAIToAnthropic(req);
       const res = await fetchWithTimeout(`${upstream}/v1/messages`, {
         method: "POST",
         headers: { ...anthropicHeaders(request, key!), "X-Request-Id": reqId },
-        body: JSON.stringify(req),
+        body: JSON.stringify(anthReq),
       });
       if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
-      return passthroughResponse(res);
-    });
-  }
 
-  if (
-    matchesApiPath(route.path, reqUrlPath, "/chat/completions") &&
-    request.method === "POST"
-  ) {
-    return wrapProxyRequest(reqId, async () => {
-      const req = (await request.json()) as OpenAIRequest;
-      const { model: resolvedModel, upstream, authErr } = resolveModelAndUpstream(
-        request,
-        route.upstream,
-        req.model || "gpt-5.4-mini",
-      );
-      if (authErr) return authErrorResponse(authErr);
-      req.model = resolvedModel;
-      debugLog(`[${reqId}] POST /v1/chat/completions → ${upstream} (model=${resolvedModel})`);
-
-      if (fmt === "anthropic") {
-        const anthReq = formatOpenAIToAnthropic(req);
-        const res = await fetchWithTimeout(`${upstream}/v1/messages`, {
-          method: "POST",
-          headers: { ...anthropicHeaders(request, key!), "X-Request-Id": reqId },
-          body: JSON.stringify(anthReq),
-        });
-        if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
-
-        if (anthReq.stream) {
-          return new Response(
-            streamAnthropicToOpenAI(
-              (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
-              anthReq.model,
-            ),
-            { headers: SSE_HEADERS },
-          );
-        }
-        return jsonResponse(
-          toOpenAIResponse((await res.json()) as AnthropicResponse, anthReq.model),
+      if (anthReq.stream) {
+        return new Response(
+          streamAnthropicToOpenAI(
+            (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+            anthReq.model,
+          ),
+          { headers: SSE_HEADERS },
         );
       }
+      return jsonResponse(
+        toOpenAIResponse((await res.json()) as AnthropicResponse, anthReq.model),
+      );
+    }
 
-      for (const msg of req.messages || []) {
-        if (msg.role === "developer") {
-          msg.role = "system";
-          debugLog(`[${reqId}] Rewriting developer role message to system for upstream compatibility`);
-        }
+    // Rewrite developer role for upstreams that don't support it
+    for (const msg of req.messages || []) {
+      if (msg.role === "developer") {
+        msg.role = "system";
+        debugLog(`[${reqId}] Rewriting developer role message to system for upstream compatibility`);
       }
+    }
 
-      const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
+    if (upstream.includes("opencode.ai") && isResponsesApiModel(resolvedModel)) {
+      const isFree = isFreeOpenCodeModel(resolvedModel);
+      const shouldStreamUpstream = req.stream === true || isFree;
+      const respReq = buildResponsesRequest(resolvedModel, req.messages || [], {
+        tools: req.tools,
+        stream: shouldStreamUpstream,
+        max_tokens: req.max_tokens,
+        temperature: req.temperature,
+        top_p: req.top_p,
+      });
+      injectDecoyToolsIfNeeded(respReq, resolvedModel, true);
+      debugLog(`[${reqId}] POST /v1/chat/completions → ${upstream}/responses (model=${resolvedModel})`);
+      const res = await fetchWithTimeout(`${upstream}/responses`, {
         method: "POST",
-        headers: { ...openaiAuthHeaders(key), "X-Request-Id": reqId },
-        body: JSON.stringify(req),
+        headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
+        body: JSON.stringify(respReq),
       });
       if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
-      return passthroughResponse(res);
+      if (req.stream) {
+        return new Response(
+          streamResponsesToChatCompletion(
+            (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+            resolvedModel,
+          ),
+          { headers: SSE_HEADERS },
+        );
+      }
+      const contentType = res.headers.get("content-type") || "";
+      if (isFree && contentType.includes("text/event-stream")) {
+        const chatJson = await aggregateChatStreamToJson(
+          streamResponsesToChatCompletion(
+            (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+            resolvedModel,
+          ),
+          resolvedModel,
+        );
+        return jsonResponse(chatJson);
+      }
+      return jsonResponse(responsesJsonToChat(await res.json(), resolvedModel));
+    }
+
+    const isFree = upstream.includes("opencode.ai") && isFreeOpenCodeModel(resolvedModel);
+    const shouldStreamUpstream = req.stream === true || isFree;
+    const upstreamReq = { ...req, stream: shouldStreamUpstream };
+    if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(upstreamReq, resolvedModel);
+    injectOpencodeFreeTierMarker(upstreamReq, upstream, resolvedModel);
+    const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
+      method: "POST",
+      headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
+      body: JSON.stringify(upstreamReq),
     });
-  }
-
-  if (route.path === "/v1/completions" && request.method === "POST") {
-    return wrapProxyRequest(reqId, async () => {
-      const req = (await request.json()) as OpenAICompletionRequest;
-      const { model: resolvedModel, upstream, authErr } = resolveModelAndUpstream(
-        request,
-        route.upstream,
-        req.model || "gpt-5.4-mini",
+    if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
+    if (req.stream) {
+      return passthroughResponse(res);
+    }
+    const contentType = res.headers.get("content-type") || "";
+    if (isFree && contentType.includes("text/event-stream")) {
+      const chatJson = await aggregateChatStreamToJson(
+        (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+        resolvedModel,
       );
-      if (authErr) return authErrorResponse(authErr);
-      req.model = resolvedModel;
-      debugLog(`[${reqId}] POST /v1/completions → ${upstream} (model=${resolvedModel})`);
+      return jsonResponse(chatJson);
+    }
+    return passthroughResponse(res);
+  });
+}
 
-      if (fmt === "openai") {
-        const chatReq = formatOpenAICompletionToOpenAIChat(req);
-        const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
+/** POST /v1/completions — Legacy completions → chat / Anthropic / passthrough */
+async function handleV1Completions(
+  reqId: string,
+  request: Request,
+  route: ReturnType<typeof routeConfig>,
+  fmt: ReturnType<typeof upstreamFormat>,
+  key: string | null,
+): Promise<Response> {
+  return wrapProxyRequest(reqId, async () => {
+    const req = (await request.json()) as OpenAICompletionRequest;
+    const { model: resolvedModel, upstream, authErr } = resolveModelAndUpstream(
+      request,
+      route.upstream,
+      req.model || "gpt-5.4-mini",
+    );
+    if (authErr) return authErrorResponse(authErr);
+    req.model = resolvedModel;
+    debugLog(`[${reqId}] POST /v1/completions → ${upstream} (model=${resolvedModel})`);
+
+    if (fmt === "openai") {
+      const chatReq = formatOpenAICompletionToOpenAIChat(req);
+      const isFree = upstream.includes("opencode.ai") && isFreeOpenCodeModel(resolvedModel);
+      if (upstream.includes("opencode.ai") && isResponsesApiModel(resolvedModel)) {
+        const respReq = buildResponsesRequest(resolvedModel, chatReq.messages, {
+          stream: chatReq.stream === true || isFree,
+          max_tokens: chatReq.max_tokens,
+          temperature: chatReq.temperature,
+          top_p: chatReq.top_p,
+        });
+        injectDecoyToolsIfNeeded(respReq, resolvedModel, true);
+        const res = await fetchWithTimeout(`${upstream}/responses`, {
           method: "POST",
-          headers: { ...openaiAuthHeaders(key), "X-Request-Id": reqId },
-          body: JSON.stringify(chatReq),
+          headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
+          body: JSON.stringify(respReq),
         });
         if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
-
-        if (chatReq.stream) {
-          return new Response(
-            streamOpenAIChatToOpenAICompletion(
-              (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+        if (respReq.stream) {
+          if (chatReq.stream) {
+            return new Response(
+              streamOpenAIChatToOpenAICompletion(
+                streamResponsesToChatCompletion(
+                  (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+                  resolvedModel,
+                ),
+                req.model,
+              ),
+              { headers: SSE_HEADERS },
+            );
+          }
+          return jsonResponse(
+            formatOpenAIChatToOpenAICompletion(
+              await aggregateChatStreamToJson(
+                streamResponsesToChatCompletion(
+                  (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+                  resolvedModel,
+                ),
+                resolvedModel,
+              ),
               req.model,
             ),
-            { headers: SSE_HEADERS },
           );
         }
         return jsonResponse(
           formatOpenAIChatToOpenAICompletion(
-            (await res.json()) as OpenAIResponse,
+            responsesJsonToChat(await res.json(), resolvedModel),
             req.model,
           ),
         );
       }
+      const upstreamChatReq = { ...chatReq, stream: chatReq.stream === true || isFree };
+      if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(upstreamChatReq, resolvedModel);
+      injectOpencodeFreeTierMarker(upstreamChatReq, upstream, resolvedModel);
+      const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
+        method: "POST",
+        headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
+        body: JSON.stringify(upstreamChatReq),
+      });
+      if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
 
-      if (fmt === "anthropic") {
-        const anthReq = formatOpenAICompletionToAnthropic(req);
-        const res = await fetchWithTimeout(`${upstream}/v1/messages`, {
-          method: "POST",
-          headers: { ...anthropicHeaders(request, key!), "X-Request-Id": reqId },
-          body: JSON.stringify(anthReq),
-        });
-        if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
-
-        if (anthReq.stream) {
-          return new Response(
-            streamAnthropicToOpenAICompletion(
-              (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
-              anthReq.model,
-            ),
-            { headers: SSE_HEADERS },
-          );
-        }
+      if (chatReq.stream) {
+        return new Response(
+          streamOpenAIChatToOpenAICompletion(
+            (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+            req.model,
+          ),
+          { headers: SSE_HEADERS },
+        );
+      }
+      const contentType = res.headers.get("content-type") || "";
+      if (isFree && contentType.includes("text/event-stream")) {
         return jsonResponse(
-          toOpenAICompletionResponse(
-            (await res.json()) as AnthropicResponse,
-            anthReq.model,
+          formatOpenAIChatToOpenAICompletion(
+            await aggregateChatStreamToJson(
+              (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+              resolvedModel,
+            ),
+            req.model,
           ),
         );
       }
+      return jsonResponse(
+        formatOpenAIChatToOpenAICompletion(
+          (await res.json()) as OpenAIResponse,
+          req.model,
+        ),
+      );
+    }
 
-      const res = await fetchWithTimeout(`${upstream}/completions`, {
+    if (fmt === "anthropic") {
+      const anthReq = formatOpenAICompletionToAnthropic(req);
+      const res = await fetchWithTimeout(`${upstream}/v1/messages`, {
         method: "POST",
-        headers: { ...openaiAuthHeaders(key), "X-Request-Id": reqId },
-        body: JSON.stringify(req),
+        headers: { ...anthropicHeaders(request, key!), "X-Request-Id": reqId },
+        body: JSON.stringify(anthReq),
       });
       if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
-      return passthroughResponse(res);
-    });
-  }
 
-  if (
-    matchesApiPath(route.path, reqUrlPath, "/responses") &&
-    request.method === "POST"
-  ) {
-    return handleResponsesRequest(request, route.upstream, reqId);
-  }
-
-  if (request.method === "GET") {
-    const isModelsPath =
-      route.path === "/v1/models" ||
-      route.path.startsWith("/v1/models/") ||
-      reqUrlPath === "/models" ||
-      reqUrlPath.startsWith("/models/");
-    if (isModelsPath) {
-      return handleModelsRequest(request, route);
+      if (anthReq.stream) {
+        return new Response(
+          streamAnthropicToOpenAICompletion(
+            (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+            anthReq.model,
+          ),
+          { headers: SSE_HEADERS },
+        );
+      }
+      return jsonResponse(
+        toOpenAICompletionResponse(
+          (await res.json()) as AnthropicResponse,
+          anthReq.model,
+        ),
+      );
     }
+
+    // Completions passthrough
+    const res = await fetchWithTimeout(`${upstream}/completions`, {
+      method: "POST",
+      headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
+      body: JSON.stringify(req),
+    });
+    if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
+    return passthroughResponse(res);
+  });
+}
+
+/** GET /v1/models or / — model discovery or root info */
+async function handleModelsOrInfo(
+  reqId: string,
+  request: Request,
+  route: ReturnType<typeof routeConfig>,
+): Promise<Response> {
+  const reqUrlPath = new URL(request.url).pathname;
+  const isModelsPath =
+    route.path === "/v1/models" ||
+    route.path.startsWith("/v1/models/") ||
+    reqUrlPath === "/models" ||
+    reqUrlPath.startsWith("/models/");
+  if (isModelsPath) {
+    return handleModelsRequest(request, route);
   }
 
   return jsonResponse(
     {
       name: "pontis-proxy",
-      version: "1.0.0",
+      version: pkg.version,
       request_id: reqId,
       endpoints: {
         "/v1/messages": "Anthropic → upstream (translated when upstream is OpenAI)",
@@ -302,12 +505,60 @@ async function handleRequest(request: Request): Promise<Response> {
   );
 }
 
+async function handleRequest(request: Request): Promise<Response> {
+  const reqId = generateRequestId();
+  const route = routeConfig(request);
+  const fmt = upstreamFormat();
+  const reqUrlPath = new URL(request.url).pathname;
+  const key = extractApiKey(request.headers);
+
+  if (route.path === "/v1/messages" && request.method === "POST") {
+    return handleV1Messages(reqId, request, route, fmt, key);
+  }
+
+  if (matchesApiPath(route.path, reqUrlPath, "/chat/completions") && request.method === "POST") {
+    return handleChatCompletions(reqId, request, route, fmt, key);
+  }
+
+  if (route.path === "/v1/completions" && request.method === "POST") {
+    return handleV1Completions(reqId, request, route, fmt, key);
+  }
+
+  if (matchesApiPath(route.path, reqUrlPath, "/responses") && request.method === "POST") {
+    return handleResponsesRequest(request, route.upstream, reqId);
+  }
+
+  if (request.method === "GET") {
+    return handleModelsOrInfo(reqId, request, route);
+  }
+
+  return jsonResponse(
+    {
+      name: "pontis-proxy",
+      version: pkg.version,
+      request_id: reqId,
+      endpoints: {
+        "/v1/messages": "Anthropic → upstream (translated when upstream is OpenAI)",
+        "/v1/chat/completions": "OpenAI Chat → upstream (translated when upstream is Anthropic)",
+        "/v1/completions": "OpenAI Completions → upstream (translated when needed)",
+        "/v1/responses": "OpenAI Responses → chat completions (Codex CLI)",
+        "/v1/models": "Model discovery proxy",
+        "/docs": "Interactive documentation & web UI",
+      },
+    },
+    route.path === "/" ? 200 : 404,
+  );
+}
+
 const app = new Hono();
 app.use("*", logger());
 
 // Security headers + CORS (H3, L1)
+// CORS is intentionally limited to localhost origins: the proxy is consumed by
+// CLI agents (not browsers), and the server binds to loopback by default, so a
+// remote site cannot reach it. A page on another localhost port is inside the
+// same trust boundary as any local process.
 app.use("*", async (c, next) => {
-  // CORS: only allow localhost origins
   const origin = c.req.header("Origin");
   if (origin) {
     try {
@@ -321,12 +572,17 @@ app.use("*", async (c, next) => {
     if (c.req.method === "OPTIONS") return c.body(null, 204);
   }
   await next();
-  // Security headers
   c.header("X-Content-Type-Options", "nosniff");
   c.header("X-Frame-Options", "DENY");
 });
 
+app.get("/docs", (c) => c.html(getDocsHtml()));
+app.get("/docs/", (c) => c.html(getDocsHtml()));
+
 app.get("/install", (c) =>
+  c.redirect("https://raw.githubusercontent.com/khrees/pontis/main/install.sh", 302),
+);
+app.get("/install.sh", (c) =>
   c.redirect("https://raw.githubusercontent.com/khrees/pontis/main/install.sh", 302),
 );
 app.all("*", (c) => handleRequest(c.req.raw));

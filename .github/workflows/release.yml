@@ -53,26 +53,33 @@ jobs:
             echo "Tag $TAG is new."
           fi
 
+      - name: Set up Bun
+        if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Set up Node.js
         if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
         uses: actions/setup-node@v4
         with:
           node-version: 18
-          cache: 'npm'
 
       - name: Install dependencies
         if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
-        run: npm ci
+        run: bun install
 
       - name: Build proxy and CLI JS bundles
         if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
-        run: npm run build
+        run: bun run build
 
       - name: Build native binaries
         if: steps.tag_check.outputs.exists == 'false' || github.event.inputs.tag_name != ''
         run: |
           mkdir -p dist/bin
           npx pkg dist/proxy.js \
+            --public \
+            --no-bytecode \
             --targets node18-macos-arm64,node18-macos-x64,node18-linux-x64,node18-win-x64 \
             --out-path dist/bin/
           # Rename base binaries to standardized names

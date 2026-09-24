@@ -1,6 +1,3 @@
-/**
- * Converts Anthropic Messages response to OpenAI Chat Completions response.
- */
 import { extractInputTokens, extractOutputTokens } from '../../cache';
 import {
   AnthropicResponse,

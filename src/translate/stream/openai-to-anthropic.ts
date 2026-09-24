@@ -291,9 +291,11 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream<Uint8Array>
 
       // Map finish reason and usage
       let stopReason = "end_turn";
-      if (finishReason === "tool_calls") stopReason = "tool_use";
-      else if (finishReason === "length") stopReason = "max_tokens";
-      else if (finishReason === "stop") stopReason = "end_turn";
+      if (finishReason === "tool_calls") {
+        stopReason = "tool_use";
+      } else if (finishReason === "length") {
+        stopReason = "max_tokens";
+      }
 
       enqueueSSE(controller, "message_delta", {
         type: "message_delta",
@@ -308,4 +310,66 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream<Uint8Array>
       controller.close();
     },
   });
+}
+
+export async function aggregateChatStreamToJson(
+  openaiStream: ReadableStream<Uint8Array>,
+  model: string,
+): Promise<import('../../types').OpenAIResponse> {
+  const reader = openaiStream.getReader();
+  const decoder = new TextDecoder();
+  let content = "";
+  let buffer = "";
+  let finishReason: "stop" | "length" | "tool_calls" | "content_filter" | null = "stop";
+  let promptTokens = 0;
+  let completionTokens = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data:")) continue;
+        const dataStr = trimmed.slice(5).trim();
+        if (dataStr === "[DONE]") continue;
+        try {
+          const parsed = JSON.parse(dataStr);
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta) content += delta;
+          if (parsed.choices?.[0]?.finish_reason) {
+            finishReason = parsed.choices[0].finish_reason;
+          }
+          if (parsed.usage) {
+            promptTokens = parsed.usage.prompt_tokens || 0;
+            completionTokens = parsed.usage.completion_tokens || 0;
+          }
+        } catch {}
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return {
+    id: `chatcmpl_${Date.now()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content },
+        finish_reason: finishReason,
+      },
+    ],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    },
+  };
 }

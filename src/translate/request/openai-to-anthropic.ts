@@ -1,6 +1,3 @@
-/**
- * Converts OpenAI Chat Completions request to Anthropic Messages request.
- */
 import {
   OpenAIRequest,
   OpenAIMessage,
@@ -140,7 +137,6 @@ export function formatOpenAIToAnthropic(body: OpenAIRequest): AnthropicRequest {
     }
   }
 
-  // Build Anthropic request
   const anthropicRequest: AnthropicRequest = {
     model,
     messages: anthropicMessages,

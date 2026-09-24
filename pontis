@@ -5,14 +5,28 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [ -f "$SCRIPT_DIR/src/cli.ts" ]; then
+# Add Pontis-managed clients to PATH so installed tools are always resolvable
+PONTIS_CLIENTS_DIR="$HOME/.pontis/clients"
+if [ -d "$PONTIS_CLIENTS_DIR" ]; then
+  for client_dir in "$PONTIS_CLIENTS_DIR"/*; do
+    if [ -d "$client_dir/bin" ]; then
+      export PATH="$client_dir/bin:$PATH"
+    fi
+    # Also check npm-style node_modules/.bin for Pi
+    if [ -d "$client_dir/node_modules/.bin" ]; then
+      export PATH="$client_dir/node_modules/.bin:$PATH"
+    fi
+  done
+fi
+
+if [ -f "$SCRIPT_DIR/src/cli/index.ts" ]; then
   # Dev mode — TypeScript source is available
-  exec npx --yes tsx "$SCRIPT_DIR/src/cli.ts" "$@"
+  exec npx --yes tsx "$SCRIPT_DIR/src/cli/index.ts" "$@"
 elif [ -f "$SCRIPT_DIR/cli.mjs" ]; then
   # Installed mode — bundled ESM JS sits alongside this launcher
   exec node "$SCRIPT_DIR/cli.mjs" "$@"
 else
   echo "Error: Cannot find Pontis CLI bundle." >&2
-  echo "Expected either $SCRIPT_DIR/src/cli.ts (dev) or $SCRIPT_DIR/cli.mjs (installed)." >&2
+  echo "Expected either $SCRIPT_DIR/src/cli/index.ts (dev) or $SCRIPT_DIR/cli.mjs (installed)." >&2
   exit 1
 fi

@@ -4,7 +4,9 @@ import {
   assistantMessageFromOutputItems,
 } from "../assistant-message";
 import { getUpstream, resolveModel, selectUpstream } from "../config";
-import { fetchWithTimeout, jsonResponse, openaiAuthHeaders, SSE_HEADERS, upstreamErrorResponse, wrapProxyRequest } from "../http";
+import { getModel } from "../env";
+import { fetchWithTimeout, jsonResponse, openaiAuthHeaders, passthroughResponse, SSE_HEADERS, upstreamErrorResponse, wrapProxyRequest } from "../http";
+import { isResponsesApiModel, injectDecoyToolsIfNeeded, injectOpencodeFreeTierMarker, isFreeOpenCodeModel } from "../opencode-models";
 import { debugLog, warnLog } from "../logger";
 import { responseCache } from "../responses-cache";
 import type { OpenAIMessage, OpenAIResponse, ResponsesApiRequest, ResponsesApiUsage } from "../types";
@@ -14,6 +16,8 @@ import {
   extractUsage,
   responsesToChatMessages,
 } from "../translate/request/responses-to-chat";
+import { buildResponsesRequest, streamResponsesToChatCompletion } from "../translate/request/chat-to-responses";
+import { aggregateChatStreamToJson } from "../translate/stream/openai-to-anthropic";
 import {
   streamChatToResponses,
   type StreamCompleteEvent,
@@ -21,6 +25,22 @@ import {
 
 function createResponseId(): string {
   return `resp_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+}
+
+async function aggregateStreamToResponseParts(
+  raw: ReadableStream<Uint8Array>,
+  resolvedModel: string,
+  upstreamIsResponses: boolean,
+): Promise<{ output: unknown; usage: ResponsesApiUsage }> {
+  const src = upstreamIsResponses
+    ? streamResponsesToChatCompletion(raw, resolvedModel)
+    : raw;
+  const chatRes = await aggregateChatStreamToJson(src, resolvedModel);
+  const message = chatRes.choices?.[0]?.message || { role: "assistant" as const };
+  return {
+    output: chatResponseToOutput(message),
+    usage: extractUsage(chatRes),
+  };
 }
 
 function cacheTurn(
@@ -67,19 +87,57 @@ export async function handleResponsesRequest(
   reqId: string,
 ): Promise<Response> {
   return wrapProxyRequest(reqId, async () => {
-    const key = extractApiKey(request.headers);
+    const requestKey = extractApiKey(request.headers);
+
+    // Codex sends its stored OPENAI_API_KEY (sk-...) when routing through
+    // OPENAI_BASE_URL, or may send no key at all when switching to a native
+    // GPT/o-series model mid-session. In either case, substitute the proxy's
+    // own API key so the real upstream accepts the request.
+    // This is safe because the server only binds to loopback.
+    let key = requestKey;
+    if (!key || (key.startsWith("sk-") && process.env.OPENAI_API_KEY)) {
+      key = process.env.PONTIS_API_KEY || process.env.OPENAI_API_KEY || requestKey;
+    }
+
     const req = (await request.json()) as ResponsesApiRequest;
     const originalModel = req.model || "gpt-5.4-mini";
 
+    // Strip provider prefix from model name (e.g. "pontis/hy3-free" → "hy3-free")
+    // Codex passes the model as <provider>/<model> when using a custom model_provider.
     let resolvedModel = originalModel;
+    const slashIdx = resolvedModel.lastIndexOf("/");
+    if (slashIdx > 0) {
+      resolvedModel = resolvedModel.slice(slashIdx + 1);
+    }
     const baseUpstream = getUpstream(routeUpstream);
     if (baseUpstream.includes("opencode.ai")) {
       resolvedModel = resolveModel(resolvedModel);
+    } else {
+      const lower = resolvedModel.toLowerCase();
+      if (
+        lower.startsWith("gpt-") ||
+        lower.startsWith("o1") ||
+        lower.startsWith("o3") ||
+        lower.startsWith("claude-")
+      ) {
+        const configuredModel = getModel();
+        if (configuredModel) {
+          resolvedModel = configuredModel;
+        }
+      }
     }
     req.model = resolvedModel;
 
     const upstream = selectUpstream(request, routeUpstream, resolvedModel);
-    const authErr = upstream.includes("opencode.ai") ? validateApiKey(key) : null;
+    const isFree = isFreeOpenCodeModel(resolvedModel);
+    const isDummy = !key || key === "pontis" || key === "dummy";
+    const authErr = upstream.includes("opencode.ai")
+      ? !isDummy
+        ? validateApiKey(key)
+        : !isFree
+          ? validateApiKey(key)
+          : null
+      : null;
     if (authErr) return authErrorResponse(authErr);
 
     debugLog(
@@ -96,21 +154,81 @@ export async function handleResponsesRequest(
       );
     }
 
-    const { messages } = responsesToChatMessages(
-      req,
-      resolvedModel,
-      cachedPrevious?.fullMessages as OpenAIMessage[] | undefined,
-    );
-
     const acceptHeader = request.headers.get("Accept") || "";
     const shouldStream =
       req.stream !== undefined
         ? req.stream
         : acceptHeader.includes("text/event-stream");
 
+    if (upstream.includes("opencode.ai") && isResponsesApiModel(resolvedModel)) {
+      const nativeBody: Record<string, unknown> = {
+        model: resolvedModel,
+        stream: shouldStream || isFree,
+      };
+      if (cachedPrevious?.fullMessages) {
+        const { messages: prevMessages } = responsesToChatMessages(
+          { ...req, previous_response_id: undefined },
+          resolvedModel,
+          cachedPrevious.fullMessages as OpenAIMessage[],
+        );
+        const rebuilt = buildResponsesRequest(resolvedModel, prevMessages, {
+          tools: undefined,
+          stream: shouldStream,
+        });
+        nativeBody.input = rebuilt.input;
+        if (rebuilt.instructions) nativeBody.instructions = rebuilt.instructions;
+      } else {
+        if (req.instructions) nativeBody.instructions = req.instructions;
+        if (req.input) nativeBody.input = req.input;
+        if (req.previous_response_id) nativeBody.previous_response_id = req.previous_response_id;
+      }
+      if (req.tools) nativeBody.tools = req.tools;
+      const rawTokens = req.max_output_tokens ?? req.max_tokens;
+      if (rawTokens !== undefined) {
+        nativeBody.max_output_tokens = Math.max(16, rawTokens);
+      }
+      delete nativeBody.max_tokens;
+      if (req.temperature !== undefined) nativeBody.temperature = req.temperature;
+      if (req.top_p !== undefined) nativeBody.top_p = req.top_p;
+      injectDecoyToolsIfNeeded(nativeBody, resolvedModel, true);
+      debugLog(
+        `[${reqId}] POST /v1/responses → ${upstream}/responses native (model=${resolvedModel})`,
+      );
+      const res = await fetchWithTimeout(`${upstream}/responses`, {
+        method: "POST",
+        headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
+        body: JSON.stringify(nativeBody),
+      });
+      if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
+      if (shouldStream) return passthroughResponse(res);
+      const contentType = res.headers.get("content-type") || "";
+      if (isFree && contentType.includes("text/event-stream")) {
+        const { output, usage } = await aggregateStreamToResponseParts(
+          (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+          resolvedModel,
+          true,
+        );
+        return jsonResponse({
+          id: createResponseId(),
+          object: "response",
+          model: originalModel,
+          status: "completed",
+          usage,
+          output,
+        });
+      }
+      return passthroughResponse(res);
+    }
+
+    const { messages } = responsesToChatMessages(
+      req,
+      resolvedModel,
+      cachedPrevious?.fullMessages as OpenAIMessage[] | undefined,
+    );
+
     const chatReq = buildChatRequest(req, req.model, messages);
-    chatReq.stream = shouldStream;
-    if (shouldStream) {
+    chatReq.stream = shouldStream || isFree;
+    if (chatReq.stream) {
       chatReq.stream_options = { include_usage: true };
     } else {
       delete chatReq.stream_options;
@@ -118,16 +236,18 @@ export async function handleResponsesRequest(
 
     logResponsesTranslation(reqId, req, chatReq);
 
+    if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(chatReq, resolvedModel);
+    injectOpencodeFreeTierMarker(chatReq, upstream, resolvedModel);
     const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
       method: "POST",
-      headers: { ...openaiAuthHeaders(key), "X-Request-Id": reqId },
+      headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
       body: JSON.stringify(chatReq),
     });
     if (!res.ok) return upstreamErrorResponse(res, await res.text(), reqId);
 
     const responseId = createResponseId();
 
-    if (chatReq.stream) {
+    if (chatReq.stream && shouldStream) {
       cacheTurn(responseId, resolvedModel, originalModel, chatReq.messages, {
         input_tokens: 0,
         output_tokens: 0,
@@ -159,7 +279,13 @@ export async function handleResponsesRequest(
       );
     }
 
-    const chatRes = (await res.json()) as OpenAIResponse;
+    const contentType = res.headers.get("content-type") || "";
+    const chatRes = (chatReq.stream && contentType.includes("text/event-stream")
+      ? await aggregateChatStreamToJson(
+          (res.body || new ReadableStream()) as ReadableStream<Uint8Array>,
+          resolvedModel,
+        )
+      : ((await res.json()) as OpenAIResponse)) as OpenAIResponse;
     const message = chatRes.choices?.[0]?.message || { role: "assistant" as const };
     const { output } = chatResponseToOutput(message);
     const usage = extractUsage(chatRes);

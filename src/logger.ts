@@ -1,8 +1,6 @@
-declare const process: { env?: Record<string, string | undefined> };
+import { isDebug } from "./env";
 
-export function isDebug(): boolean {
-  return typeof process !== "undefined" && process.env?.PONTIS_DEBUG === "true";
-}
+export { isDebug };
 
 export function debugLog(...args: unknown[]): void {
   if (isDebug()) console.log(...args);

@@ -84,10 +84,9 @@ export interface CapturedRequestBody {
   stream_options?: { include_usage: boolean };
   max_tokens?: number;
   temperature?: number;
+  apiKey?: string;
 }
 
-/** @deprecated Use CapturedRequestBody */
-export type CapturedChatRequest = CapturedRequestBody;
 
 export function parseCapturedBody(body: BodyInit | null | undefined): CapturedRequestBody {
   return JSON.parse(body as string) as CapturedRequestBody;

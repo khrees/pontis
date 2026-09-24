@@ -1,0 +1,124 @@
+name: Nightly Release
+
+on:
+  push:
+    branches:
+      - nightly
+      - 'nightly-*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Force release tag name (e.g., v1.0.3-nightly)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Nightly Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from package.json
+        id: pkg_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Determine Tag Name
+        id: determine_tag
+        run: |
+          TAG_NAME="${{ github.event.inputs.tag_name }}"
+          if [ -z "$TAG_NAME" ]; then
+            TAG_NAME="${{ steps.pkg_version.outputs.version }}-nightly"
+          fi
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Set nightly version suffix in package.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            if (!pkg.version.includes('-nightly')) {
+              pkg.version = pkg.version + '-nightly';
+              fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+            }
+          "
+
+      - name: Build proxy and CLI JS bundles
+        run: bun run build
+
+      - name: Build native binaries
+        run: |
+          mkdir -p dist/bin
+          npx pkg dist/proxy.js \
+            --public \
+            --no-bytecode \
+            --targets node18-macos-arm64,node18-macos-x64,node18-linux-x64,node18-win-x64 \
+            --out-path dist/bin/
+          # Rename base binaries to standardized names
+          mv dist/bin/proxy-macos-arm64 dist/bin/pontis-proxy-macos-arm64
+          mv dist/bin/proxy-macos-x64 dist/bin/pontis-proxy-macos-x64
+          mv dist/bin/proxy-linux-x64 dist/bin/pontis-proxy-linux-x64
+          mv dist/bin/proxy-win-x64.exe dist/bin/pontis-proxy-win-x64.exe
+
+      - name: Copy launcher and CLI bundle to dist
+        run: |
+          cp pontis dist/bin/pontis
+          cp dist/cli.mjs dist/bin/cli.mjs
+
+      - name: Generate checksums
+        run: |
+          cd dist/bin
+          shasum -a 256 * > checksums.sha256
+          cat checksums.sha256
+
+      - name: Clean up existing release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.determine_tag.outputs.tag }}
+        run: |
+          # Delete the release on GitHub if it exists
+          gh release delete "$TAG_NAME" --cleanup-tag -y 2>/dev/null || true
+          # Delete local tag if it exists
+          git tag -d "$TAG_NAME" 2>/dev/null || true
+          # Delete remote tag on origin
+          git push --delete origin "$TAG_NAME" 2>/dev/null || true
+
+      - name: Push tag to repository
+        run: |
+          TAG="${{ steps.determine_tag.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.determine_tag.outputs.tag }}
+        run: |
+          gh release create "$TAG_NAME" \
+            dist/bin/* \
+            --title "Pontis $TAG_NAME" \
+            --prerelease \
+            --generate-notes
