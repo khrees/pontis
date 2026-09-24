@@ -6,7 +6,7 @@ import {
 import { getUpstream, resolveModel, selectUpstream } from "../config";
 import { getModel } from "../env";
 import { fetchWithTimeout, jsonResponse, openaiAuthHeaders, passthroughResponse, SSE_HEADERS, upstreamErrorResponse, wrapProxyRequest } from "../http";
-import { isResponsesApiModel, injectDecoyToolsIfNeeded, isFreeOpenCodeModel } from "../opencode-models";
+import { isResponsesApiModel, injectDecoyToolsIfNeeded, injectOpencodeFreeTierMarker, isFreeOpenCodeModel } from "../opencode-models";
 import { debugLog, warnLog } from "../logger";
 import { responseCache } from "../responses-cache";
 import type { OpenAIMessage, OpenAIResponse, ResponsesApiRequest, ResponsesApiUsage } from "../types";
@@ -203,6 +203,7 @@ export async function handleResponsesRequest(
     logResponsesTranslation(reqId, req, chatReq);
 
     if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(chatReq, resolvedModel);
+    injectOpencodeFreeTierMarker(chatReq, upstream, resolvedModel);
     const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
       method: "POST",
       headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },

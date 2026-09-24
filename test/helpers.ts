@@ -84,6 +84,7 @@ export interface CapturedRequestBody {
   stream_options?: { include_usage: boolean };
   max_tokens?: number;
   temperature?: number;
+  apiKey?: string;
 }
 
 

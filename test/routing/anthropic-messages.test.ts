@@ -590,10 +590,12 @@ describe('POST /v1/messages — Anthropic endpoint', () => {
     process.env.PONTIS_PROVIDER = 'opencode';
     let capturedUrl = '';
     let capturedHeaders: any = null;
+    let capturedBody: CapturedRequestBody | null = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (url, init?: RequestInit) => {
         capturedUrl = url.toString();
         capturedHeaders = init?.headers;
+        capturedBody = parseCapturedBody(init?.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -610,6 +612,7 @@ describe('POST /v1/messages — Anthropic endpoint', () => {
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
     expect(capturedUrl).toContain('opencode.ai/zen/v1');
-    expect(capturedHeaders.Authorization).toBeUndefined();
+    expect(capturedHeaders.Authorization).toBe('Bearer public');
+    expect(capturedBody!.apiKey).toBe('public');
   });
 });

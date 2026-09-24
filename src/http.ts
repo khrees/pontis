@@ -226,6 +226,11 @@ export function openaiAuthHeaders(
     if (isFreeTier) {
       headers["User-Agent"] = `opencode/${OPENCODE_CLIENT_VERSION}`;
       headers["x-opencode-client"] = "desktop";
+
+      // The free-tier gateway recognizes the native client by the literal
+      // credential `public` (mirrors CLI: `options.apiKey = "public"`).
+      // It never applies to paid models, so a real key is never masked.
+      headers["Authorization"] = "Bearer public";
     } else {
       const client =
         incomingRequest?.headers.get("x-opencode-client") ||

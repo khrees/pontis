@@ -30,7 +30,12 @@ import {
   responsesJsonToChat,
   streamResponsesToChatCompletion,
 } from "./translate/request/chat-to-responses";
-import { isResponsesApiModel, injectDecoyToolsIfNeeded, isFreeOpenCodeModel } from "./opencode-models";
+import {
+  isResponsesApiModel,
+  injectDecoyToolsIfNeeded,
+  injectOpencodeFreeTierMarker,
+  isFreeOpenCodeModel,
+} from "./opencode-models";
 import { formatOpenAIToAnthropic as toAnthropicResponse } from "./translate/response/openai-to-anthropic";
 import { formatAnthropicToOpenAI as toOpenAIResponse } from "./translate/response/anthropic-to-openai";
 import { streamOpenAIToAnthropic, aggregateChatStreamToJson } from "./translate/stream/openai-to-anthropic";
@@ -134,6 +139,7 @@ async function handleV1Messages(
       const shouldStreamUpstream = openaiReq.stream === true || isFree;
       const upstreamReq = { ...openaiReq, stream: shouldStreamUpstream };
       if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(upstreamReq, resolvedModel);
+      injectOpencodeFreeTierMarker(upstreamReq, upstream, resolvedModel);
       const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
         method: "POST",
         headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
@@ -299,6 +305,7 @@ async function handleChatCompletions(
     const shouldStreamUpstream = req.stream === true || isFree;
     const upstreamReq = { ...req, stream: shouldStreamUpstream };
     if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(upstreamReq, resolvedModel);
+    injectOpencodeFreeTierMarker(upstreamReq, upstream, resolvedModel);
     const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
       method: "POST",
       headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },
@@ -375,6 +382,7 @@ async function handleV1Completions(
         );
       }
       if (upstream.includes("opencode.ai")) injectDecoyToolsIfNeeded(chatReq, resolvedModel);
+      injectOpencodeFreeTierMarker(chatReq, upstream, resolvedModel);
       const res = await fetchWithTimeout(`${upstream}/chat/completions`, {
         method: "POST",
         headers: { ...openaiAuthHeaders(key, upstream, request, resolvedModel), "X-Request-Id": reqId },

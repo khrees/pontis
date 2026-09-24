@@ -325,3 +325,25 @@ export function injectDecoyToolsIfNeeded(
   body.tools = [...toInject, ...existing];
   return toInject.length > 0;
 }
+
+/**
+ * Inject the free-tier client marker into a request body.
+ * OpenCode's gateway recognizes requests "from within OpenCode" by the literal
+ * credential `public` — sent via `Authorization: Bearer public` and/or a body
+ * field `apiKey: "public"` (mirrors the native CLI, which sets
+ * `request.body.apiKey = "public"` when no OPENCODE_API_KEY is present).
+ * Without it, free-model requests return 403 FreeTierError.
+ */
+export function injectOpencodeFreeTierMarker(
+  body: Record<string, any>,
+  upstream: string,
+  model: string,
+): boolean {
+  if (!upstream?.includes("opencode.ai")) return false;
+  if (!isFreeOpenCodeModel(model)) return false;
+  if (body && typeof body === "object" && (body as any).apiKey === undefined) {
+    (body as any).apiKey = "public";
+    return true;
+  }
+  return false;
+}
