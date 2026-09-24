@@ -89,7 +89,7 @@ export interface CapturedRequestBody {
 /** @deprecated Use CapturedRequestBody */
 export type CapturedChatRequest = CapturedRequestBody;
 
-export function parseCapturedBody(body: BodyInit | null | undefined): CapturedRequestBody {
+export function parseCapturedBody(body: unknown): CapturedRequestBody {
   return JSON.parse(body as string) as CapturedRequestBody;
 }
 

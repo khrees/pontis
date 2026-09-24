@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   responsesToChatMessages,
   buildChatRequest,
@@ -1076,6 +1076,10 @@ describe("Responses API streaming events", () => {
 // =============================================================================
 
 describe("Responses API integration", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns 200 for basic non-streaming response", async () => {
     const { default: worker } = await import("../src/index");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
