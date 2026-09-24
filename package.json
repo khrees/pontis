@@ -16,18 +16,18 @@
     "@cloudflare/workers-types": "^4.20260504.1",
     "@types/node": "^25.9.3",
     "@types/ws": "^8.18.1",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.2",
     "pkg": "^5.8.1",
     "typescript": "^6.0.3",
-    "vitest": "^3.2.4",
-    "wrangler": "^4.87.0"
+    "vitest": "^4.1.11",
+    "wrangler": "^4.139.0"
   },
   "license": "MIT",
   "description": "Universal AI gateway and runtime launcher bridging Claude Code, Codex CLI, OpenCode, Pi, Cloudflare Workers AI, and local LLMs with bidirectional protocol translation (Anthropic, OpenAI Chat, Responses API, and Completions).",
   "dependencies": {
-    "@hono/node-server": "^2.0.5",
+    "@hono/node-server": "^2.1.1",
     "chalk": "^5.6.2",
     "commander": "^15.0.0",
-    "hono": "^4.12.17"
+    "hono": "^4.13.9"
   }
 }
